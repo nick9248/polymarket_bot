@@ -1,0 +1,93 @@
+"""
+db_service.py
+High-level database service. Orchestrates connection lifecycle and calls repository functions.
+This is the only DB-related module that main.py and other services should import.
+"""
+
+import logging
+
+from core.database import connection, repository
+from core.models.leaderboard import LeaderboardEntry
+from core.models.trades import TradeEntry
+
+logger = logging.getLogger(__name__)
+
+
+def initialise_database() -> None:
+    """
+    Ensure the polymarket_robot database and all tables exist.
+    Safe to call on every startup.
+    """
+    logger.info("Initialising database...")
+    connection.create_database_if_not_exists()
+    connection.init_schema()
+    logger.info("Database ready.")
+
+
+def persist_leaderboard(
+    entries: list[LeaderboardEntry],
+    period: str,
+    category: str,
+) -> int:
+    """
+    Save a leaderboard snapshot to the database and upsert tracked wallets.
+
+    Args:
+        entries: Leaderboard entries to save.
+        period: Time period (e.g. 'ALL', 'WEEKLY').
+        category: Category (e.g. 'OVERALL', 'CRYPTO').
+
+    Returns:
+        Number of rows inserted into leaderboard_snapshots.
+    """
+    conn = connection.get_connection()
+    try:
+        inserted = repository.save_leaderboard_snapshot(conn, entries, period, category)
+        repository.upsert_tracked_wallets(conn, entries)
+        logger.info(
+            "Persisted %d leaderboard entries (period=%s, category=%s).",
+            inserted, period, category,
+        )
+        return inserted
+    finally:
+        conn.close()
+
+
+def persist_trades(trades: list[TradeEntry]) -> int:
+    """
+    Save trades to the database, skipping any already stored.
+
+    Args:
+        trades: Trade entries to save.
+
+    Returns:
+        Number of NEW trades inserted.
+    """
+    if not trades:
+        return 0
+    conn = connection.get_connection()
+    try:
+        inserted = repository.save_trades(conn, trades)
+        logger.info("Persisted trades: %d new inserted.", inserted)
+        return inserted
+    finally:
+        conn.close()
+
+
+def get_known_trade_hashes(wallet: str, limit: int = 10) -> list[str]:
+    """
+    Return the most recently stored transaction hashes for a wallet.
+    Used to detect new trades before sending Telegram alerts.
+
+    Args:
+        wallet: Proxy wallet address.
+        limit: Number of recent hashes to return.
+
+    Returns:
+        List of transaction hash strings.
+    """
+    conn = connection.get_connection()
+    try:
+        return repository.get_latest_trade_hashes(conn, wallet, limit)
+    finally:
+        conn.close()
