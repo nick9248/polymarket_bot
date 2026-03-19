@@ -12,14 +12,14 @@ from dotenv import load_dotenv
 _env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
 load_dotenv(dotenv_path=_env_path)
 
-DB_NAME = "polymarket_robot"
+DB_NAME = os.environ.get("DB_NAME", "polymarket_robot")
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", 5433)),
     "dbname": DB_NAME,
-    "user": "postgres",
-    "password": os.environ.get("db_pass", ""),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", os.environ.get("db_pass", "")),
 }
 
 # Config used to connect to the default 'postgres' DB when creating polymarket_robot
