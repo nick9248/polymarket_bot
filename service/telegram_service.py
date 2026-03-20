@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from utility.constants import REQUEST_TIMEOUT_SECONDS
 from core.models.trades import TradeEntry
+from core.api import polymarket_client
 
 # Load .env from project root
 _env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
@@ -76,6 +77,10 @@ def send_trade_alert(trade: TradeEntry, trader_name: str) -> bool:
     """
     side_emoji = "🟢" if trade.side == "BUY" else "🔴"
     usdc = trade.size * trade.price
+    
+    # Fetch token ID
+    token_id = polymarket_client.get_market_token_id(trade.condition_id, trade.outcome_index)
+    token_display = f"<code>{token_id[:8]}...{token_id[-8:]}</code>" if token_id else "N/A"
 
     text = (
         f"{side_emoji} <b>NEW TRADE DETECTED</b>\n"
@@ -83,6 +88,7 @@ def send_trade_alert(trade: TradeEntry, trader_name: str) -> bool:
         f"👤 <b>Trader:</b> {trader_name}\n"
         f"📋 <b>Market:</b> {trade.title}\n"
         f"🎯 <b>Outcome:</b> {trade.outcome}\n"
+        f"🔑 <b>Token ID:</b> {token_display}\n"
         f"📊 <b>Side:</b> {trade.side}\n"
         f"💵 <b>Price:</b> ${trade.price:.3f} ({trade.price * 100:.1f}% implied prob)\n"
         f"📦 <b>Size:</b> {trade.size:,.0f} shares (~${usdc:,.0f} USDC)\n"

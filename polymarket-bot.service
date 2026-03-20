@@ -1,0 +1,18 @@
+[Unit]
+Description=Polymarket Robot Copy-Trading Daemon
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=nick
+WorkingDirectory=/home/nick/polymarket_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/nick/polymarket_bot/.venv/bin/python main.py --wallets 0xTARGET_WALLET_REDACTED:coinman2
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

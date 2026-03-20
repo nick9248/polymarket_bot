@@ -113,12 +113,17 @@ def main() -> None:
         logger.info("COPY-TRADING MODE ACTIVATED")
         logger.info("=" * 85)
         wallet_list = [w.strip() for w in args.wallets.split(",") if w.strip()]
-        for wallet in wallet_list:
+        for item in wallet_list:
+            parts = item.split(":")
+            wallet = parts[0].strip()
+            # Parse custom name if provided (e.g. 0x123...:coinman2), else fallback to hash
+            user_name = parts[1].strip() if len(parts) > 1 else f"CopyTarget_{wallet[:6]}"
+            
             # We create a mock LeaderboardEntry for our custom target
             mock_entry = LeaderboardEntry(
                 rank=0,
                 proxy_wallet=wallet,
-                user_name=f"CopyTarget_{wallet[:6]}",
+                user_name=user_name,
                 x_username="",
                 vol=0.0,
                 pnl=0.0,
@@ -267,6 +272,11 @@ def main() -> None:
 
         # Detect which trades are actually new
         new_trades = [t for t in trades if t.transaction_hash not in known_hashes]
+        
+        if not known_hashes:
+            logger.info("  [!] Genesis Run for %s: First time seeing this wallet.", trader.proxy_wallet)
+            logger.info("      Seeding database with %d historical trades without alerting/executing.", len(new_trades))
+            new_trades = [] # Clear the queue to prevent blasting Telegram / executing history
 
         # Persist all (ON CONFLICT DO NOTHING handles duplicates)
         db_service.persist_trades(trades)
@@ -275,6 +285,14 @@ def main() -> None:
         for trade in new_trades:
             if telegram_service.send_trade_alert(trade, trader.user_name):
                 alerts_sent += 1
+                
+            # Attempt to execute copy trade
+            try:
+                from service.copy_trade_service import execute_copy_trade
+                logger.info("Initiating automatic copy-trade execution...")
+                execute_copy_trade(trade, trade_size_usd=2.0)
+            except Exception as e:
+                logger.error("Failed to copy trade: %s", e)
 
         if new_trades:
             logger.info("  → %d new trade(s) detected, %d alert(s) sent.", len(new_trades), alerts_sent)
@@ -283,6 +301,11 @@ def main() -> None:
 
     logger.info("=" * 60)
     logger.info("Done. Total alerts sent: %d", alerts_sent)
+    
+    # Validation step: Log our own active executions if in copy-trading mode
+    if args.wallets:
+        from service.validator_service import validate_own_trades
+        validate_own_trades(limit=5)
 
 
 if __name__ == "__main__":

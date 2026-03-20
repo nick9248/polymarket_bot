@@ -163,3 +163,36 @@ def get_user_trades(wallet: str, limit: int = 5) -> list[dict]:
     data = response.json()
     logger.debug("Received %d trades for wallet %s.", len(data), wallet)
     return data
+
+
+def get_market_token_id(condition_id: str, outcome_index: int) -> str:
+    """
+    Fetch the clobTokenId for a specific market condition and outcome.
+    
+    Args:
+        condition_id: The unique conditionId for the Polymarket market.
+        outcome_index: The integer index of the chosen outcome (e.g. 0 for Yes).
+        
+    Returns:
+        The exact string token ID for the CLOB API.
+    """
+    url = f"https://gamma-api.polymarket.com/markets?condition_id={condition_id}"
+    response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    
+    data = response.json()
+    if not data:
+        logger.warning("No market found for condition_id: %s", condition_id)
+        return ""
+        
+    market = data[0]
+    tokens_str = market.get("clobTokenIds", "[]")
+    
+    import json
+    tokens = json.loads(tokens_str)
+    
+    if outcome_index < len(tokens):
+        return tokens[outcome_index]
+        
+    logger.warning("Outcome index %d out of range for tokens: %s", outcome_index, tokens)
+    return ""
