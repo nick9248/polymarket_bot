@@ -70,11 +70,11 @@ main.py                    — daemon loop, Telegram command dispatch, cycle orc
 The Polymarket `/trades` API returns an `asset` field which is the exact CLOB token ID.
 **Always use `trade.asset` directly.** Do NOT use `get_market_token_id()` (gamma API lookup) — it returns wrong/stale token IDs.
 
-### Near-expiry filter:
-Markets with `price > 0.85 or price < 0.15` are skipped — CLOB closes order books near resolution (returns 404 on tick-size endpoint).
+### CLOB valid price range:
+Orders with `price >= 0.99 or price <= 0.01` are skipped — the CLOB API rejects orders outside the 0.01–0.99 range. Empirically verified: $0.015 trades execute fine. The old 0.15–0.85 filter was incorrect.
 
 ### CLOB minimum order size:
-Each market has a `minimum_order_size` (shares, not USD). Confirmed at 5 shares for ETH price markets. `copy_trade_service` fetches it via `client.get_market(condition_id)` and bumps order size to the minimum if `trade_size_usd / price` falls short. Balance is checked against the actual (bumped) USD amount.
+Each market has a `minimum_order_size` (shares, not USD). `copy_trade_service` fetches it via `client.get_market(condition_id)`. Additionally, the CLOB enforces a **$1 minimum notional** per order regardless of share count — for cheap markets (price < ~$0.20) the share count is bumped via `ceil($1 / price)` to satisfy this floor. Both minimums are applied and the higher one wins.
 
 ### CLOB authentication — account type:
 This account uses **POLY_PROXY (signature_type=1)** with a separate proxy wallet:

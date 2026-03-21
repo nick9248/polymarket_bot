@@ -8,6 +8,7 @@ MAX_SLIPPAGE_PCT from the original signal price since coinman detected it.
 """
 
 import logging
+import math
 import os
 
 import requests
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 _CLOB_HOST = "https://clob.polymarket.com"
 _POLYGON_CHAIN_ID = 137
 _DEFAULT_MIN_ORDER_SIZE = 5  # fallback if market lookup fails
+_CLOB_MIN_NOTIONAL_USD = 1.0  # CLOB rejects orders below $1 notional regardless of share count
 
 # Maximum allowed price movement between signal price and current market price.
 # With 5-second polling, slippage is usually < 2%. 10% flags something unusual
@@ -122,7 +124,7 @@ def execute_copy_trade(trade: TradeEntry) -> bool:
 
     Places a taker order at the current best ask/bid price for the market minimum
     number of shares.  Skips if the market has moved more than _MAX_SLIPPAGE_PCT
-    from the signal price, or if the current price is near-expiry (outside 0.15–0.85).
+    from the signal price, or if the current price is outside the CLOB-valid range (0.01–0.99).
 
     Args:
         trade: The parsed TradeEntry signal to copy.
@@ -184,16 +186,22 @@ def execute_copy_trade(trade: TradeEntry) -> bool:
             current_price, trade.price, slippage_pct,
         )
 
-        # ── Near-expiry filter on current price ────────────────────────────────
-        if current_price > 0.85 or current_price < 0.15:
+        # ── CLOB valid price range ─────────────────────────────────────────────
+        # Official constraint: 0.01–0.99. Outside this the CLOB rejects orders.
+        if current_price >= 0.99 or current_price <= 0.01:
             logger.warning(
-                "Skipping: current price %.3f is near-expiry (need 0.15–0.85): %s",
+                "Skipping: current price %.4f is outside CLOB range (0.01–0.99): %s",
                 current_price, trade.title[:60],
             )
             return False
 
         # ── Minimum order size ─────────────────────────────────────────────────
+        # Two floors must both be met:
+        # 1. Per-market minimum_order_size (shares)
+        # 2. CLOB-wide $1 minimum notional — cheap markets need more shares to hit it
         min_size = _get_min_order_size(client, trade.condition_id)
+        min_size_for_notional = math.ceil(_CLOB_MIN_NOTIONAL_USD / current_price)
+        min_size = max(min_size, min_size_for_notional)
         order_cost = min_size * current_price
 
         # ── Balance check ──────────────────────────────────────────────────────

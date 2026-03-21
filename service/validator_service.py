@@ -43,11 +43,11 @@ def find_missed_trades(target_trades: list[TradeEntry], lookback_minutes: int = 
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
 
-    # Filter target trades to the lookback window and valid price range only.
-    # Outside 0.15–0.85 the CLOB closes order books so execution is impossible anyway.
+    # Filter target trades to the lookback window and CLOB-valid price range only.
+    # Official constraint is 0.01–0.99; outside that the CLOB rejects orders outright.
     recent_target = [
         t for t in target_trades
-        if t.datetime_utc >= cutoff and 0.15 <= t.price <= 0.85
+        if t.datetime_utc >= cutoff and 0.01 < t.price < 0.99
     ]
 
     if not recent_target:
