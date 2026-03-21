@@ -35,7 +35,7 @@ init_logging(level="INFO")
 logger = logging.getLogger(__name__)
 
 # Seconds between each polling cycle
-POLL_INTERVAL_SECONDS = 60
+POLL_INTERVAL_SECONDS = 5
 
 
 def parse_args() -> argparse.Namespace:
@@ -179,6 +179,54 @@ def _build_leaderboard_targets(args) -> dict[str, LeaderboardEntry]:
                 )
 
     return unique_top_traders
+
+
+def _handle_test_command(args: argparse.Namespace) -> None:
+    """
+    Handle the /test Telegram command.
+    Finds the most recent trade from the target wallet that is in a valid price
+    range (0.15–0.85) and attempts a live $1.50 copy-trade execution.
+    Reports the result back to Telegram.
+    """
+    telegram_service.send_message("🔧 <b>Test initiated</b> — fetching recent trades to find a valid market...")
+    logger.info("/test command received — running live execution test.")
+
+    try:
+        targets = _build_copy_trade_targets(args.wallets) if args.wallets else {}
+        if not targets:
+            telegram_service.send_test_result(False, "No target wallets configured.")
+            return
+
+        # Use the first configured wallet
+        trader = next(iter(targets.values()))
+        trades = trades_service.fetch_user_trades(trader.proxy_wallet, limit=50)
+
+        # Find the most recent trade in a price range the CLOB will accept
+        candidate = next(
+            (t for t in trades if 0.15 <= t.price <= 0.85),
+            None,
+        )
+
+        if candidate is None:
+            telegram_service.send_test_result(
+                False,
+                f"No recent trades in valid price range (0.15–0.85) found for {trader.user_name}. "
+                f"All recent trades are near-expiry markets."
+            )
+            return
+
+        detail = (
+            f"Market: {candidate.title[:60]}\n"
+            f"Side: {candidate.side} | Outcome: {candidate.outcome} | Price: ${candidate.price:.3f}"
+        )
+        telegram_service.send_message(f"📋 <b>Testing against:</b>\n{detail}\n\n⏳ Submitting order...")
+
+        success = execute_copy_trade(candidate, trade_size_usd=1.5)
+        telegram_service.send_test_result(success, detail)
+
+    except Exception as e:
+        logger.error("/test command failed: %s", e)
+        telegram_service.send_test_result(False, f"Unexpected error: {e}")
 
 
 def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
@@ -358,6 +406,9 @@ def main() -> None:
             if cmd == "/health":
                 stats["uptime_seconds"] = (datetime.now(timezone.utc) - started_at).total_seconds()
                 telegram_service.send_health_report(stats)
+
+            elif cmd == "/test":
+                _handle_test_command(args)
 
         # ── Run polling cycle ─────────────────────────────────────────────────
         try:

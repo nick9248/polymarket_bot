@@ -144,6 +144,7 @@ def get_pending_commands() -> list[str]:
         if text.startswith("/"):
             # Strip any @BotName suffix (e.g. /health@polym_check_bot -> /health)
             commands.append(text.split("@")[0])
+            logger.info("Received Telegram command: %s", text.split("@")[0])
 
     return commands
 
@@ -195,6 +196,19 @@ def send_health_report(stats: dict) -> bool:
     )
 
     logger.info("Sending health report to Telegram.")
+    return send_message(text)
+
+
+def send_test_result(success: bool, detail: str) -> bool:
+    """Send the result of a /test command execution."""
+    icon = "✅" if success else "❌"
+    status = "Order submitted successfully!" if success else "Order failed."
+    text = (
+        f"{icon} <b>Copy-Trade Test Result</b>\n"
+        f"\n"
+        f"<b>Status:</b> {status}\n"
+        f"<b>Detail:</b> {detail}"
+    )
     return send_message(text)
 
 

@@ -11,6 +11,7 @@ import requests
 from dotenv import load_dotenv
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, BalanceAllowanceParams, AssetType
+from py_clob_client.exceptions import PolyApiException
 from py_clob_client.order_builder.constants import BUY, SELL
 
 from core.api.polymarket_client import get_market_token_id
@@ -89,6 +90,16 @@ def execute_copy_trade(trade: TradeEntry, trade_size_usd: float = 1.5) -> bool:
         logger.error("Execution blocked: Invalid trade price %.6f (must be 0 < price <= 1.0)", trade.price)
         return False
 
+    # Skip near-expiry markets: price > 0.85 or < 0.15 means the market is almost resolved.
+    # Polymarket's CLOB closes order submission on these markets before resolution,
+    # causing guaranteed 404 "market not found" rejections.
+    if trade.price > 0.85 or trade.price < 0.15:
+        logger.warning(
+            "Skipping near-expiry market (price=%.3f). CLOB likely closed for new orders: %s",
+            trade.price, trade.title[:60],
+        )
+        return False
+
     shares_to_buy = round(trade_size_usd / trade.price, 4)
     if shares_to_buy < 0.01:
         logger.error("Execution blocked: Calculated shares %.4f too small for $%.2f at price %.4f",
@@ -132,6 +143,15 @@ def execute_copy_trade(trade: TradeEntry, trade_size_usd: float = 1.5) -> bool:
             logger.error("COPY TRADE REJECTED: %s", resp)
             return False
 
+    except PolyApiException as e:
+        if e.status_code == 404:
+            logger.warning(
+                "CLOB market not found (404) — market already closed for trading: %s",
+                trade.title[:60],
+            )
+        else:
+            logger.error("CLOB API error (status=%s): %s", e.status_code, e)
+        return False
     except (ValueError, KeyError) as e:
         logger.error("Invalid trade parameters: %s", e)
         return False
