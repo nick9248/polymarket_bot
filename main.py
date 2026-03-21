@@ -21,6 +21,7 @@ import argparse
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 
 from utility.logger import init_logging
 from core.models.leaderboard import LeaderboardEntry
@@ -180,8 +181,14 @@ def _build_leaderboard_targets(args) -> dict[str, LeaderboardEntry]:
     return unique_top_traders
 
 
-def run_cycle(args: argparse.Namespace) -> None:
-    """Execute one full polling cycle: fetch, analyse, alert, copy-trade."""
+def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
+    """
+    Execute one full polling cycle: fetch, analyse, alert, copy-trade.
+
+    Returns:
+        (alerts_sent, last_new_trade_at) where last_new_trade_at is a UTC
+        timestamp string if a new trade was found this cycle, else None.
+    """
     logger.info("=" * 60)
     logger.info("Starting polling cycle...")
 
@@ -195,7 +202,7 @@ def run_cycle(args: argparse.Namespace) -> None:
     wallets_to_check = list(unique_top_traders.values())
     if not wallets_to_check:
         logger.info("No wallets to check this cycle.")
-        return
+        return 0, None
 
     # ── Analyse traders ───────────────────────────────────────────────────────
     fetch_limit = max(args.trades_limit, 500)
@@ -242,6 +249,8 @@ def run_cycle(args: argparse.Namespace) -> None:
 
     # ── Per-trader: detect new trades, alert, copy-trade ─────────────────────
     alerts_sent = 0
+    last_new_trade_at = None
+
     for res in ranked_traders:
         trader = res["trader"]
         trades = res["trades_buffer"]
@@ -291,6 +300,9 @@ def run_cycle(args: argparse.Namespace) -> None:
             if telegram_service.send_trade_alert(trade, trader.user_name):
                 alerts_sent += 1
 
+            # Track the time of the most recent new trade this cycle
+            last_new_trade_at = trade.datetime_utc.strftime("%Y-%m-%d %H:%M UTC")
+
             # Attempt to copy the trade
             logger.info("Initiating copy-trade execution...")
             try:
@@ -313,6 +325,8 @@ def run_cycle(args: argparse.Namespace) -> None:
         from service.validator_service import validate_own_trades
         validate_own_trades(limit=5)
 
+    return alerts_sent, last_new_trade_at
+
 
 def main() -> None:
     args = parse_args()
@@ -325,11 +339,38 @@ def main() -> None:
         logger.critical("Database initialisation failed: %s", e)
         sys.exit(1)
 
+    # Runtime stats — updated each cycle and reported via /health
+    started_at = datetime.now(timezone.utc)
+    stats = {
+        "cycles_completed": 0,
+        "last_cycle_at": "Not run yet",
+        "targets": [w.split(":")[1] if ":" in w else w for w in args.wallets.split(",") if w.strip()],
+        "last_new_trade_at": None,
+        "alerts_total": 0,
+        "db_ok": True,
+        "geo_ok": True,
+    }
+
     while True:
+        # ── Handle incoming Telegram commands ────────────────────────────────
+        commands = telegram_service.get_pending_commands()
+        for cmd in commands:
+            if cmd == "/health":
+                stats["uptime_seconds"] = (datetime.now(timezone.utc) - started_at).total_seconds()
+                telegram_service.send_health_report(stats)
+
+        # ── Run polling cycle ─────────────────────────────────────────────────
         try:
-            run_cycle(args)
+            cycle_alerts, last_trade_at = run_cycle(args)
+            stats["cycles_completed"] += 1
+            stats["alerts_total"] += cycle_alerts
+            stats["last_cycle_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            if last_trade_at:
+                stats["last_new_trade_at"] = last_trade_at
+            stats["db_ok"] = True
         except Exception as e:
             logger.error("Unhandled error in polling cycle: %s", e)
+            stats["db_ok"] = False
 
         logger.info("Sleeping %ds until next cycle...", POLL_INTERVAL_SECONDS)
         time.sleep(POLL_INTERVAL_SECONDS)

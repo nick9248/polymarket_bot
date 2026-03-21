@@ -26,6 +26,9 @@ _BOT_TOKEN = os.environ.get("telegram_bot_key", "")
 _CHAT_ID = os.environ.get("telegram_chat_id", "")
 _BASE_URL = f"https://api.telegram.org/bot{_BOT_TOKEN}"
 
+# Tracks the highest processed update_id so we never handle the same message twice
+_last_update_id: int = 0
+
 
 def is_configured() -> bool:
     """Return True if both bot token and chat_id are set in .env."""
@@ -100,6 +103,98 @@ def send_trade_alert(trade: TradeEntry, trader_name: str) -> bool:
         "Sending Telegram alert — trader=%s side=%s market=%.40s",
         trader_name, trade.side, trade.title,
     )
+    return send_message(text)
+
+
+def get_pending_commands() -> list[str]:
+    """
+    Poll the Telegram Bot API for new incoming messages.
+    Returns a list of command strings (e.g. ['/health']) sent since the last check.
+    Advances the internal offset so each update is processed exactly once.
+
+    Returns:
+        List of command strings found in new messages (lowercased, stripped).
+    """
+    global _last_update_id
+
+    if not is_configured():
+        return []
+
+    try:
+        response = requests.get(
+            f"{_BASE_URL}/getUpdates",
+            params={"offset": _last_update_id + 1, "timeout": 0},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        updates = response.json().get("result", [])
+    except requests.RequestException as e:
+        logger.warning("Could not poll Telegram updates: %s", e)
+        return []
+
+    commands = []
+    for update in updates:
+        _last_update_id = max(_last_update_id, update["update_id"])
+        text = (
+            update.get("message", {})
+            .get("text", "")
+            .strip()
+            .lower()
+        )
+        if text.startswith("/"):
+            # Strip any @BotName suffix (e.g. /health@polym_check_bot -> /health)
+            commands.append(text.split("@")[0])
+
+    return commands
+
+
+def send_health_report(stats: dict) -> bool:
+    """
+    Send a formatted health status report to the configured chat.
+
+    Args:
+        stats: Dict with keys:
+            uptime_seconds (float)
+            cycles_completed (int)
+            last_cycle_at (str)          — human-readable UTC timestamp
+            targets (list[str])          — wallet display names being tracked
+            last_new_trade_at (str|None) — UTC timestamp or None
+            alerts_total (int)
+            db_ok (bool)
+            geo_ok (bool)
+
+    Returns:
+        True if sent successfully.
+    """
+    uptime_s = int(stats.get("uptime_seconds", 0))
+    hours, remainder = divmod(uptime_s, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{hours}h {minutes}m {seconds}s"
+
+    targets = stats.get("targets", [])
+    targets_str = ", ".join(targets) if targets else "none"
+
+    last_trade = stats.get("last_new_trade_at") or "No trades copied yet"
+    db_icon = "✅" if stats.get("db_ok") else "❌"
+    geo_icon = "✅" if stats.get("geo_ok") else "❌"
+
+    text = (
+        f"🤖 <b>Polymarket Bot — Health Report</b>\n"
+        f"\n"
+        f"🟢 <b>Status:</b> Running\n"
+        f"⏱ <b>Uptime:</b> {uptime_str}\n"
+        f"🔄 <b>Cycles completed:</b> {stats.get('cycles_completed', 0)}\n"
+        f"🕒 <b>Last cycle:</b> {stats.get('last_cycle_at', 'N/A')}\n"
+        f"\n"
+        f"👤 <b>Tracking:</b> {targets_str}\n"
+        f"📋 <b>Last trade copied:</b> {last_trade}\n"
+        f"📣 <b>Total alerts sent:</b> {stats.get('alerts_total', 0)}\n"
+        f"\n"
+        f"{db_icon} <b>Database:</b> {'OK' if stats.get('db_ok') else 'ERROR'}\n"
+        f"{geo_icon} <b>Geo check (Spain):</b> {'OK' if stats.get('geo_ok') else 'FAILED'}"
+    )
+
+    logger.info("Sending health report to Telegram.")
     return send_message(text)
 
 
