@@ -19,12 +19,16 @@ logger = logging.getLogger(__name__)
 LOOKBACK_MINUTES = 30
 
 
-def find_missed_trades(target_trades: list[TradeEntry], lookback_minutes: int = LOOKBACK_MINUTES) -> list[TradeEntry]:
+def find_missed_trades(
+    target_trades: list[TradeEntry],
+    lookback_minutes: int = LOOKBACK_MINUTES,
+    already_executed: set[tuple[str, str]] | None = None,
+) -> list[TradeEntry]:
     """
     Compare target wallet's recent trades against our own proxy wallet executions.
 
     Returns trades the target made that we did NOT mirror, filtered to only those
-    we could still attempt (price in 0.15–0.85 range, within lookback window).
+    we could still attempt (price in 0.01–0.99 range, within lookback window).
 
     Matching is done by (asset, side) pair — if we executed on the same CLOB token
     with the same direction within the window, it counts as covered.
@@ -32,6 +36,9 @@ def find_missed_trades(target_trades: list[TradeEntry], lookback_minutes: int = 
     Args:
         target_trades: Full trade buffer already fetched for the target wallet this cycle.
         lookback_minutes: How far back (in minutes) to look for missed trades.
+        already_executed: Set of (asset, side) pairs executed THIS cycle by the main loop.
+            These are excluded from retry to prevent double-execution caused by API
+            propagation lag (our order won't appear in the Polymarket API within 5s).
 
     Returns:
         List of TradeEntry objects representing missed executions to retry.
@@ -66,6 +73,11 @@ def find_missed_trades(target_trades: list[TradeEntry], lookback_minutes: int = 
         for t in our_trades
         if t.datetime_utc >= cutoff
     }
+
+    # Merge API-confirmed executions with same-cycle executions (which won't be in
+    # the API yet due to propagation lag — this is what caused 5x duplicate orders).
+    if already_executed:
+        our_executed |= already_executed
 
     # Find target trades with no matching execution on our side
     missed = [

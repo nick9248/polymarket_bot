@@ -312,6 +312,9 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
     # ── Per-trader: detect new trades, alert, copy-trade ─────────────────────
     alerts_sent = 0
     last_new_trade_at = None
+    # Track (asset, side) pairs executed this cycle so the validator doesn't
+    # retry them before our orders have propagated to the Polymarket API.
+    executed_this_cycle: set[tuple[str, str]] = set()
 
     for res in ranked_traders:
         trader = res["trader"]
@@ -369,7 +372,9 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
             logger.info("Initiating copy-trade execution...")
             try:
                 executed = execute_copy_trade(trade)
-                if not executed:
+                if executed:
+                    executed_this_cycle.add((trade.asset, trade.side))
+                else:
                     logger.warning("Copy-trade was not submitted for: %s", trade.title[:60])
             except Exception as e:
                 logger.error("Unexpected failure during copy-trade: %s", e)
@@ -386,7 +391,7 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
     if args.wallets:
         from service.validator_service import find_missed_trades
         for res in ranked_traders:
-            missed = find_missed_trades(res["trades_buffer"])
+            missed = find_missed_trades(res["trades_buffer"], already_executed=executed_this_cycle)
             if not missed:
                 continue
             logger.info(
