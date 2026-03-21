@@ -382,10 +382,30 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
     logger.info("=" * 60)
     logger.info("Cycle complete. Total alerts sent this cycle: %d", alerts_sent)
 
-    # Validation: log our own recent executions in copy-trade mode
+    # Validation: reconcile target trades vs our executions, retry any gaps
     if args.wallets:
-        from service.validator_service import validate_own_trades
-        validate_own_trades(limit=5)
+        from service.validator_service import find_missed_trades
+        for res in ranked_traders:
+            missed = find_missed_trades(res["trades_buffer"])
+            if not missed:
+                continue
+            logger.info(
+                "  [VALIDATOR] Retrying %d missed trade(s) for %s...",
+                len(missed), res["trader"].user_name,
+            )
+            for trade in missed:
+                logger.info(
+                    "  [VALIDATOR] Retrying: %s %s @ $%.3f",
+                    trade.side, trade.title[:55], trade.price,
+                )
+                try:
+                    executed = execute_copy_trade(trade)
+                    if not executed:
+                        logger.warning(
+                            "  [VALIDATOR] Retry skipped by executor: %s", trade.title[:60]
+                        )
+                except Exception as e:
+                    logger.error("  [VALIDATOR] Retry failed: %s", e)
 
     return alerts_sent, last_new_trade_at
 
