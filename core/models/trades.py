@@ -41,6 +41,7 @@ class TradeEntry:
     transaction_hash: str
     slug: str
     condition_id: str
+    asset: str  # CLOB token ID — use directly instead of resolving via gamma API
 
     @classmethod
     def from_api_response(cls, data: dict) -> "TradeEntry":
@@ -68,6 +69,7 @@ class TradeEntry:
             transaction_hash=data.get("transactionHash", ""),
             slug=data.get("slug", ""),
             condition_id=data.get("conditionId", ""),
+            asset=data.get("asset", ""),
         )
 
     @property

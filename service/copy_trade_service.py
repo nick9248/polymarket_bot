@@ -14,33 +14,67 @@ from py_clob_client.clob_types import OrderArgs, BalanceAllowanceParams, AssetTy
 from py_clob_client.exceptions import PolyApiException
 from py_clob_client.order_builder.constants import BUY, SELL
 
-from core.api.polymarket_client import get_market_token_id
 from core.models.trades import TradeEntry
 from utility.geo import is_in_spain
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Signature type 1 = Magic/Email Proxy Wallet
-_SIGNATURE_TYPE_PROXY = 1
+# Signature types:
+#   0 = EOA (MetaMask / direct private-key wallet, signer == funder)
+#   1 = POLY_PROXY (Magic/email wallet; signer=EOA, funder=proxy contract — must differ)
+#
+# Which to use depends on the wallet type:
+#   - poly_funder_address set AND different from derived EOA → use POLY_PROXY (1)
+#   - poly_funder_address missing or same as derived EOA → fall back to EOA (0)
 _CLOB_HOST = "https://clob.polymarket.com"
 _POLYGON_CHAIN_ID = 137
 
 
 def _get_client() -> ClobClient:
-    """Returns an authenticated ClobClient. Credentials are read fresh each call."""
-    pk = os.getenv("poly_private_key", "").strip(" '\"")
-    funder_address = os.getenv("poly_address", "").strip(" '\"").lower()
+    """
+    Returns an authenticated ClobClient.
 
-    if not pk or not funder_address:
-        raise ValueError("Missing poly_private_key or poly_address in .env")
+    Selects signature type automatically:
+    - If poly_funder_address is configured AND differs from the derived signing address,
+      uses POLY_PROXY (type=1) with the funder set to poly_funder_address.
+    - Otherwise uses EOA (type=0) with no separate funder.
+    """
+    pk = os.getenv("poly_private_key", "").strip(" '\"")
+    funder = os.getenv("poly_funder_address", "").strip(" '\"")
+
+    if not pk:
+        raise ValueError("Missing poly_private_key in .env")
+
+    # Derive the signing address to detect same-address situations
+    from eth_account import Account
+    signing_address = Account.from_key(pk).address.lower()
+    funder_lower = funder.lower() if funder else ""
+
+    if funder and funder_lower != signing_address:
+        # Magic/email wallet: proxy contract is the funder, EOA private key signs
+        logger.info("Wallet mode: POLY_PROXY — signer=%s, funder=%s", signing_address, funder_lower)
+        sig_type = 1
+    else:
+        if funder and funder_lower == signing_address:
+            logger.warning(
+                "poly_funder_address matches signing address (%s) — "
+                "POLY_PROXY requires them to differ. Falling back to EOA mode. "
+                "If this is a Magic/email wallet, set poly_funder_address to the "
+                "proxy contract address (different from your signing key's address).",
+                signing_address,
+            )
+        else:
+            logger.info("Wallet mode: EOA — signing address=%s (no separate funder)", signing_address)
+        sig_type = 0
+        funder = None
 
     client = ClobClient(
         host=_CLOB_HOST,
         key=pk,
         chain_id=_POLYGON_CHAIN_ID,
-        signature_type=_SIGNATURE_TYPE_PROXY,
-        funder=funder_address,
+        signature_type=sig_type,
+        funder=funder if funder else None,
     )
     creds = client.create_or_derive_api_creds()
     client.set_api_creds(creds)
@@ -80,9 +114,9 @@ def execute_copy_trade(trade: TradeEntry, trade_size_usd: float = 1.5) -> bool:
         logger.error("Execution blocked: Geo location is not Spain (ES).")
         return False
 
-    token_id = get_market_token_id(trade.condition_id, trade.outcome_index)
+    token_id = trade.asset
     if not token_id:
-        logger.error("Execution blocked: Could not resolve token_id for condition_id=%s", trade.condition_id)
+        logger.error("Execution blocked: No asset/token_id on trade for condition_id=%s", trade.condition_id)
         return False
 
     # Price must be in the valid Polymarket range (exclusive of 0, inclusive of 1)

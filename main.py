@@ -184,11 +184,14 @@ def _build_leaderboard_targets(args) -> dict[str, LeaderboardEntry]:
 def _handle_test_command(args: argparse.Namespace) -> None:
     """
     Handle the /test Telegram command.
-    Finds the most recent trade from the target wallet that is in a valid price
-    range (0.15–0.85) and attempts a live $1.50 copy-trade execution.
+    Searches the target wallet's recent trades for a market that is both in a
+    valid price range (0.15–0.85) AND still open on the CLOB, then attempts a
+    live $1.50 copy-trade execution.  Tries all candidates in order until one
+    succeeds (a historical trade may have a valid price but the market is now
+    closed on the CLOB, so we skip those automatically).
     Reports the result back to Telegram.
     """
-    telegram_service.send_message("🔧 <b>Test initiated</b> — fetching recent trades to find a valid market...")
+    telegram_service.send_message("🔧 <b>Test initiated</b> — fetching recent trades to find an open market...")
     logger.info("/test command received — running live execution test.")
 
     try:
@@ -201,13 +204,10 @@ def _handle_test_command(args: argparse.Namespace) -> None:
         trader = next(iter(targets.values()))
         trades = trades_service.fetch_user_trades(trader.proxy_wallet, limit=50)
 
-        # Find the most recent trade in a price range the CLOB will accept
-        candidate = next(
-            (t for t in trades if 0.15 <= t.price <= 0.85),
-            None,
-        )
+        # Collect all candidates in valid price range — the CLOB decides which are open
+        candidates = [t for t in trades if 0.15 <= t.price <= 0.85]
 
-        if candidate is None:
+        if not candidates:
             telegram_service.send_test_result(
                 False,
                 f"No recent trades in valid price range (0.15–0.85) found for {trader.user_name}. "
@@ -215,14 +215,28 @@ def _handle_test_command(args: argparse.Namespace) -> None:
             )
             return
 
-        detail = (
-            f"Market: {candidate.title[:60]}\n"
-            f"Side: {candidate.side} | Outcome: {candidate.outcome} | Price: ${candidate.price:.3f}"
-        )
-        telegram_service.send_message(f"📋 <b>Testing against:</b>\n{detail}\n\n⏳ Submitting order...")
+        logger.info("/test: found %d candidate(s) — trying each until one succeeds.", len(candidates))
 
-        success = execute_copy_trade(candidate, trade_size_usd=1.5)
-        telegram_service.send_test_result(success, detail)
+        for candidate in candidates:
+            detail = (
+                f"Market: {candidate.title[:60]}\n"
+                f"Side: {candidate.side} | Outcome: {candidate.outcome} | Price: ${candidate.price:.3f}"
+            )
+            telegram_service.send_message(f"📋 <b>Trying:</b>\n{detail}\n\n⏳ Submitting order...")
+
+            success = execute_copy_trade(candidate, trade_size_usd=1.5)
+            if success:
+                telegram_service.send_test_result(True, detail)
+                return
+
+            logger.info("/test: candidate failed (market likely closed), trying next...")
+
+        # All candidates exhausted
+        telegram_service.send_test_result(
+            False,
+            f"Tried {len(candidates)} candidate(s) — all markets are closed on the CLOB.\n"
+            f"Waiting for {trader.user_name} to trade a mid-range market."
+        )
 
     except Exception as e:
         logger.error("/test command failed: %s", e)
