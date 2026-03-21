@@ -10,6 +10,7 @@ Responsibilities:
 
 import logging
 import psycopg2
+from psycopg2 import sql
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 from core.database.config import DB_CONFIG, DB_ADMIN_CONFIG, DB_NAME
@@ -94,7 +95,7 @@ def create_database_if_not_exists() -> None:
             )
             exists = cur.fetchone()
             if not exists:
-                cur.execute(f'CREATE DATABASE "{DB_NAME}"')
+                cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(DB_NAME)))
                 logger.info("Database '%s' created successfully.", DB_NAME)
             else:
                 logger.info("Database '%s' already exists.", DB_NAME)

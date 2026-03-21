@@ -32,15 +32,15 @@ def is_in_spain() -> bool:
         country = data.get("country", "")
         ip_addr = data.get("ip", "unknown")
         
-        logger.info(f"Detected IP: {ip_addr}, Country: {country}")
+        logger.info("Detected IP: %s, Country: %s", ip_addr, country)
         
         if country == "ES":
             logger.info("Geo validation passed: System is in Spain.")
             return True
         else:
-            logger.error(f"Geo validation failed: System is in {country}, not ES (Spain).")
+            logger.error("Geo validation failed: System is in %s, not ES (Spain).", country)
             return False
             
-    except Exception as e:
-        logger.error(f"Failed to fetch IP geolocation: {e}")
+    except requests.RequestException as e:
+        logger.error("Failed to fetch IP geolocation: %s", e)
         return False

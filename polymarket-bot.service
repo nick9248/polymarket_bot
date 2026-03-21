@@ -7,12 +7,28 @@ Requires=postgresql.service
 Type=simple
 User=nick
 WorkingDirectory=/home/nick/polymarket_bot
+
+# systemd.env must use plain KEY=VALUE format (no spaces around =, no surrounding quotes).
+# This is separate from .env which python-dotenv reads at runtime.
+# Example: WALLETS=0xABCDEF:coinman2
+EnvironmentFile=/home/nick/polymarket_bot/systemd.env
+
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/nick/polymarket_bot/.venv/bin/python main.py --wallets 0xTARGET_WALLET_REDACTED:coinman2
-Restart=always
-RestartSec=30
+
+ExecStart=/home/nick/polymarket_bot/.venv/bin/python main.py --wallets ${WALLETS}
+
+# Restart as safety net if the process crashes (the daemon loop handles normal cycling)
+Restart=on-failure
+RestartSec=15
+
 StandardOutput=journal
 StandardError=journal
+
+# ── Basic hardening ────────────────────────────────────────────────────────
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/nick/polymarket_bot
 
 [Install]
 WantedBy=multi-user.target

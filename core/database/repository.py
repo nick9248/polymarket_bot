@@ -148,3 +148,45 @@ def get_latest_trade_hashes(
         cur.execute(sql, (wallet, limit))
         rows = cur.fetchall()
     return [row[0] for row in rows]
+
+
+def is_wallet_tracked(conn: psycopg2.extensions.connection, wallet: str) -> bool:
+    """
+    Check if a wallet has ever been registered in tracked_wallets.
+    Used to distinguish a true genesis run from an empty-trades-in-DB situation.
+
+    Args:
+        conn: Open psycopg2 connection.
+        wallet: Proxy wallet address.
+
+    Returns:
+        True if the wallet exists in tracked_wallets, False otherwise.
+    """
+    sql = "SELECT 1 FROM tracked_wallets WHERE proxy_wallet = %s"
+    with conn.cursor() as cur:
+        cur.execute(sql, (wallet,))
+        return cur.fetchone() is not None
+
+
+def upsert_single_wallet(
+    conn: psycopg2.extensions.connection,
+    wallet: str,
+    user_name: str,
+) -> None:
+    """
+    Register a single wallet in tracked_wallets. Used in copy-trade mode after
+    genesis seeding so subsequent runs know the wallet is not new.
+
+    Args:
+        conn: Open psycopg2 connection.
+        wallet: Proxy wallet address.
+        user_name: Display name for the wallet.
+    """
+    sql = """
+        INSERT INTO tracked_wallets (proxy_wallet, user_name)
+        VALUES (%s, %s)
+        ON CONFLICT (proxy_wallet) DO UPDATE SET user_name = EXCLUDED.user_name
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (wallet, user_name))
+    conn.commit()

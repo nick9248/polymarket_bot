@@ -91,3 +91,38 @@ def get_known_trade_hashes(wallet: str, limit: int = 10) -> list[str]:
         return repository.get_latest_trade_hashes(conn, wallet, limit)
     finally:
         conn.close()
+
+
+def is_wallet_tracked(wallet: str) -> bool:
+    """
+    Check whether a wallet has ever been registered in tracked_wallets.
+    Used to distinguish a true genesis run from a DB-was-wiped situation.
+
+    Args:
+        wallet: Proxy wallet address.
+
+    Returns:
+        True if the wallet exists in tracked_wallets, False otherwise.
+    """
+    conn = connection.get_connection()
+    try:
+        return repository.is_wallet_tracked(conn, wallet)
+    finally:
+        conn.close()
+
+
+def upsert_wallet(wallet: str, user_name: str) -> None:
+    """
+    Register a wallet in tracked_wallets. Used in copy-trade mode after genesis
+    seeding so that subsequent runs correctly identify the wallet as already known.
+
+    Args:
+        wallet: Proxy wallet address.
+        user_name: Display name for the wallet.
+    """
+    conn = connection.get_connection()
+    try:
+        repository.upsert_single_wallet(conn, wallet, user_name)
+        logger.info("Wallet registered as tracked: %s (%s)", user_name, wallet[:12] + "...")
+    finally:
+        conn.close()

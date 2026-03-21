@@ -5,7 +5,9 @@ Responsibility: make the HTTP request and return raw parsed JSON.
 No business logic — just connect, fetch, and return.
 """
 
+import json
 import logging
+import time
 import requests
 
 from utility.endpoints import LEADERBOARD, BUILDER_LEADERBOARD, TRADES
@@ -168,31 +170,48 @@ def get_user_trades(wallet: str, limit: int = 5) -> list[dict]:
 def get_market_token_id(condition_id: str, outcome_index: int) -> str:
     """
     Fetch the clobTokenId for a specific market condition and outcome.
-    
+    Retries up to 3 times on transient failures.
+
     Args:
         condition_id: The unique conditionId for the Polymarket market.
         outcome_index: The integer index of the chosen outcome (e.g. 0 for Yes).
-        
+
     Returns:
-        The exact string token ID for the CLOB API.
+        The exact string token ID for the CLOB API, or "" on failure.
     """
     url = f"https://gamma-api.polymarket.com/markets?condition_id={condition_id}"
-    response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
-    response.raise_for_status()
-    
-    data = response.json()
-    if not data:
-        logger.warning("No market found for condition_id: %s", condition_id)
-        return ""
-        
-    market = data[0]
-    tokens_str = market.get("clobTokenIds", "[]")
-    
-    import json
-    tokens = json.loads(tokens_str)
-    
-    if outcome_index < len(tokens):
-        return tokens[outcome_index]
-        
-    logger.warning("Outcome index %d out of range for tokens: %s", outcome_index, tokens)
+
+    for attempt in range(3):
+        try:
+            response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+
+            data = response.json()
+            if not data:
+                logger.warning("No market found for condition_id: %s", condition_id)
+                return ""
+
+            market = data[0]
+            tokens_str = market.get("clobTokenIds", "[]")
+
+            try:
+                tokens = json.loads(tokens_str)
+            except json.JSONDecodeError:
+                logger.error("Could not parse clobTokenIds for condition_id: %s — raw: %s", condition_id, tokens_str)
+                return ""
+
+            if outcome_index < len(tokens):
+                return tokens[outcome_index]
+
+            logger.warning("Outcome index %d out of range for tokens: %s", outcome_index, tokens)
+            return ""
+
+        except requests.RequestException as e:
+            if attempt < 2:
+                logger.warning("Token resolution attempt %d failed: %s — retrying...", attempt + 1, e)
+                time.sleep(1)
+            else:
+                logger.error("Failed to resolve token_id after 3 attempts: %s", e)
+                return ""
+
     return ""

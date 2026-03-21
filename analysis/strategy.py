@@ -41,8 +41,10 @@ class RoundTrip:
         if bought == 0 or sold == 0:
             return False
             
-        # Polymarket sizes return as floats, allow very small margin of drift (.001)
-        return abs(bought - sold) < 0.001
+        # Allow a relative drift of 0.01% of position size, minimum 0.001 shares.
+        # Absolute tolerance alone breaks on large positions (e.g. 1000 shares ± 0.001).
+        tolerance = max(0.001, bought * 0.0001)
+        return abs(bought - sold) < tolerance
 
     def calculate_metrics(self) -> dict:
         """Returns the final PnL and Hold Time stats for this round trip flip."""
@@ -91,7 +93,7 @@ class StrategyAnalyzer:
         completed_trips = []
 
         for trade in sorted_trades:
-            key = f"{trade.condition_id}_{trade.outcome_index}"
+            key = (trade.condition_id, trade.outcome_index)
             
             if not active_positions[key]:
                 active_positions[key].append(RoundTrip(trade.condition_id, trade.title, trade.outcome))
