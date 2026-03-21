@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket Analyzer — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ── CSS Variables ─────────────────────────────────────────────────────── */
+    :root {
+      --bg:          #080b12;
+      --bg2:         #0d1220;
+      --surface:     rgba(255,255,255,0.04);
+      --surface2:    rgba(255,255,255,0.07);
+      --border:      rgba(255,255,255,0.08);
+      --border2:     rgba(255,255,255,0.14);
+      --accent:      #6c63ff;
+      --accent2:     #a78bfa;
+      --gold:        #f59e0b;
+      --gold2:       #fbbf24;
+      --green:       #10b981;
+      --red:         #ef4444;
+      --blue:        #3b82f6;
+      --text:        #f1f5f9;
+      --text2:       #94a3b8;
+      --text3:       #475569;
+      --radius:      14px;
+      --radius-sm:   8px;
+      --transition:  0.25s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    /* ── Reset & Base ──────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Animated background orbs */
+    body::before, body::after {
+      content: '';
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(120px);
+      pointer-events: none;
+      z-index: 0;
+    }
+    body::before {
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(108,99,255,0.12) 0%, transparent 70%);
+      top: -200px; left: -200px;
+      animation: float1 18s ease-in-out infinite alternate;
+    }
+    body::after {
+      width: 500px; height: 500px;
+      background: radial-gradient(circle, rgba(245,158,11,0.08) 0%, transparent 70%);
+      bottom: -150px; right: -150px;
+      animation: float2 22s ease-in-out infinite alternate;
+    }
+    @keyframes float1 { to { transform: translate(80px, 60px); } }
+    @keyframes float2 { to { transform: translate(-60px, -80px); } }
+
+    /* ── Layout ────────────────────────────────────────────────────────────── */
+    .page { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 28px 80px; }
+
+    /* ── Header ────────────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 36px 0 28px;
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { display: flex; align-items: center; gap: 14px; }
+    .logo-icon {
+      width: 44px; height: 44px;
+      background: linear-gradient(135deg, var(--accent), var(--gold));
+      border-radius: 12px;
+      display: grid; place-items: center;
+      font-size: 22px;
+    }
+    .logo-text h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+    .logo-text span { font-size: 0.75rem; color: var(--text2); letter-spacing: 0.06em; text-transform: uppercase; }
+    .header-badge {
+      font-size: 0.7rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent2);
+      border: 1px solid rgba(167,139,250,0.25);
+      padding: 4px 10px;
+      border-radius: 100px;
+      background: rgba(167,139,250,0.06);
+    }
+
+    /* ── Section Titles ─────────────────────────────────────────────────────── */
+    .section-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text3);
+      margin-bottom: 16px;
+    }
+    .section-heading {
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+    .section-sub { font-size: 0.875rem; color: var(--text2); margin-bottom: 28px; }
+
+    /* ── Controls Panel ──────────────────────────────────────────────────────── */
+    .controls-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      margin-top: 36px;
+      backdrop-filter: blur(20px);
+    }
+    .controls-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 24px;
+      align-items: end;
+    }
+    @media (max-width: 800px) { .controls-grid { grid-template-columns: 1fr; } }
+
+    .field-group { display: flex; flex-direction: column; gap: 10px; }
+    .field-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text2);
+    }
+
+    /* Pill multi-select */
+    .pill-group { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill {
+      font-size: 0.78rem;
+      font-weight: 500;
+      padding: 6px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border2);
+      background: var(--surface2);
+      color: var(--text2);
+      cursor: pointer;
+      user-select: none;
+      transition: var(--transition);
+    }
+    .pill:hover { border-color: var(--accent); color: var(--text); }
+    .pill.active {
+      background: linear-gradient(135deg, rgba(108,99,255,0.3), rgba(167,139,250,0.2));
+      border-color: var(--accent);
+      color: var(--accent2);
+    }
+
+    /* Limit slider row */
+    .slider-row { display: flex; flex-direction: column; gap: 8px; }
+    .slider-header {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .slider-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--accent2);
+    }
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%; height: 4px;
+      background: var(--border2);
+      border-radius: 2px;
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      cursor: pointer;
+      box-shadow: 0 0 12px rgba(108,99,255,0.5);
+      transition: var(--transition);
+    }
+    input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+    /* OrderBy select */
+    .styled-select {
+      appearance: none;
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      color: var(--text);
+      border-radius: var(--radius-sm);
+      padding: 8px 36px 8px 14px;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.85rem;
+      cursor: pointer;
+      outline: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2394a3b8'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      background-size: 20px;
+      transition: var(--transition);
+    }
+    .styled-select:hover { border-color: var(--accent); }
+
+    /* Run Button */
+    .run-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 12px 28px;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: var(--transition);
+      white-space: nowrap;
+      box-shadow: 0 0 30px rgba(108,99,255,0.3);
+      letter-spacing: 0.01em;
+    }
+    .run-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 40px rgba(108,99,255,0.45); }
+    .run-btn:active { transform: translateY(0); }
+    .run-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .run-btn .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+    .run-btn.loading .spinner { display: block; }
+    .run-btn.loading .btn-icon { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error banner ──────────────────────────────────────────────────────── */
+    .error-banner {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #fca5a5;
+      border-radius: var(--radius-sm);
+      padding: 14px 18px;
+      margin-top: 24px;
+      font-size: 0.875rem;
+      display: none;
+    }
+
+    /* ── Section Divider ─────────────────────────────────────────────────────── */
+    .section-block { margin-top: 52px; }
+
+    /* ── Empty State ─────────────────────────────────────────────────────────── */
+    .empty-state {
+      text-align: center;
+      padding: 56px 24px;
+      color: var(--text3);
+      font-size: 0.9rem;
+    }
+    .empty-state .icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+    /* ── Super-Trader Cards ──────────────────────────────────────────────────── */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .trader-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px;
+      backdrop-filter: blur(20px);
+      transition: var(--transition);
+      animation: fadeUp 0.4s ease both;
+      position: relative;
+      overflow: hidden;
+    }
+    .trader-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--gold));
+      opacity: 0;
+      transition: var(--transition);
+    }
+    .trader-card:hover { border-color: var(--border2); transform: translateY(-3px); box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+    .trader-card:hover::before { opacity: 1; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .card-header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+    .avatar {
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(108,99,255,0.4), rgba(245,158,11,0.3));
+      display: grid; place-items: center;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .card-name-block { flex: 1; min-width: 0; }
+    .card-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .card-wallet {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text3);
+      margin-top: 2px;
+    }
+    .verified-badge {
+      font-size: 1rem;
+      flex-shrink: 0;
+      filter: drop-shadow(0 0 6px rgba(59,130,246,0.7));
+    }
+
+    .card-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .card-key { font-size: 0.72rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.07em; }
+    .card-val { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; font-weight: 600; }
+    .card-val.pos { color: var(--green); }
+    .card-val.neg { color: var(--red); }
+
+    .lists-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+    .list-chip {
+      font-size: 0.67rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 3px 9px;
+      border-radius: 100px;
+      background: rgba(108,99,255,0.15);
+      border: 1px solid rgba(108,99,255,0.3);
+      color: var(--accent2);
+    }
+    .star-icon { color: var(--gold); margin-right: 4px; }
+
+    /* ── Filter chips for table ──────────────────────────────────────────────── */
+    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 20px; }
+    .filter-chip {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 5px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border2);
+      background: transparent;
+      color: var(--text2);
+      cursor: pointer;
+      transition: var(--transition);
+      font-family: 'Inter', sans-serif;
+    }
+    .filter-chip:hover { border-color: var(--accent); color: var(--text); }
+    .filter-chip.active {
+      background: rgba(108,99,255,0.2);
+      border-color: var(--accent);
+      color: var(--accent2);
+    }
+    .filter-chip.bot.active {
+      background: rgba(239,68,68,0.15);
+      border-color: rgba(239,68,68,0.5);
+      color: #fca5a5;
+    }
+    .filter-chip.human.active {
+      background: rgba(16,185,129,0.15);
+      border-color: rgba(16,185,129,0.5);
+      color: #6ee7b7;
+    }
+    .filter-label { font-size: 0.72rem; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; margin-right: 4px; }
+
+    /* ── Table ───────────────────────────────────────────────────────────────── */
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    thead th {
+      background: rgba(255,255,255,0.03);
+      padding: 14px 18px;
+      text-align: left;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text3);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    thead th:hover { color: var(--text2); }
+    thead th .sort-icon { margin-left: 4px; opacity: 0.4; }
+    thead th.sorted .sort-icon { opacity: 1; color: var(--accent2); }
+
+    tbody tr {
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      transition: background var(--transition);
+      animation: fadeUp 0.3s ease both;
+    }
+    tbody tr:hover { background: var(--surface2); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody td { padding: 14px 18px; vertical-align: middle; }
+
+    .rank-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--text3);
+    }
+    .rank-num.top { color: var(--gold); font-weight: 700; }
+
+    .trader-cell { display: flex; align-items: center; gap: 12px; }
+    .t-avatar {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(108,99,255,0.4), rgba(245,158,11,0.3));
+      display: grid; place-items: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .t-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .t-name { font-weight: 600; font-size: 0.875rem; }
+    .t-handle { font-size: 0.7rem; color: var(--text3); }
+
+    .type-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+    .type-badge.bot {
+      background: rgba(239,68,68,0.12);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #fca5a5;
+    }
+    .type-badge.human {
+      background: rgba(16,185,129,0.12);
+      border: 1px solid rgba(16,185,129,0.3);
+      color: #6ee7b7;
+    }
+    .type-badge.dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+    }
+    .type-badge.bot .dot { background: #ef4444; }
+    .type-badge.human .dot { background: #10b981; }
+
+    .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; }
+    .pos-val { color: var(--green); font-weight: 600; }
+    .neg-val { color: var(--red); font-weight: 600; }
+    .rov-val { font-weight: 700; }
+    .rov-val.high { color: var(--accent2); }
+    .rov-val.med  { color: var(--gold2); }
+    .rov-val.low  { color: var(--text2); }
+
+    .lb-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+    .lb-chip {
+      font-size: 0.62rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 100px;
+      background: rgba(167,139,250,0.1);
+      border: 1px solid rgba(167,139,250,0.25);
+      color: var(--accent2);
+    }
+
+    .classification-text {
+      font-size: 0.75rem;
+      color: var(--text3);
+      max-width: 200px;
+    }
+
+    /* ── Scrollbar ─────────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+    /* ── Tooltip ────────────────────────────────────────────────────────────── */
+    [data-tip] { position: relative; cursor: help; }
+    [data-tip]::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1e293b;
+      border: 1px solid var(--border2);
+      color: var(--text);
+      font-size: 0.75rem;
+      font-family: 'Inter', sans-serif;
+      padding: 6px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+      z-index: 100;
+    }
+    [data-tip]:hover::after { opacity: 1; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">📊</div>
+      <div class="logo-text">
+        <h1>Polymarket Analyzer</h1>
+        <span>Trader Intelligence Dashboard</span>
+      </div>
+    </div>
+    <div class="header-badge" id="statusBadge">Ready</div>
+  </header>
+
+  <!-- ── Controls ───────────────────────────────────────────────────────── -->
+  <div class="controls-panel">
+    <p class="section-title">Configuration</p>
+    <div class="controls-grid">
+
+      <!-- Left: Category + Period -->
+      <div style="display:flex;flex-direction:column;gap:20px;">
+        <div class="field-group">
+          <span class="field-label">Category</span>
+          <div class="pill-group" id="catPills"></div>
+        </div>
+        <div class="field-group">
+          <span class="field-label">Time Period</span>
+          <div class="pill-group" id="periodPills"></div>
+        </div>
+      </div>
+
+      <!-- Middle: Limit + OrderBy -->
+      <div style="display:flex;flex-direction:column;gap:20px;">
+        <div class="field-group">
+          <span class="field-label">Limit — entries per leaderboard</span>
+          <div class="slider-row">
+            <div class="slider-header">
+              <span style="font-size:0.78rem;color:var(--text2);">1</span>
+              <span class="slider-val" id="limitVal">10</span>
+              <span style="font-size:0.78rem;color:var(--text2);">50</span>
+            </div>
+            <input type="range" id="limitSlider" min="1" max="50" value="10" />
+          </div>
+        </div>
+        <div class="field-group">
+          <span class="field-label">Order By</span>
+          <select class="styled-select" id="orderBySelect">
+            <option value="PNL">PnL — Profit &amp; Loss</option>
+            <option value="VOL">VOL — Volume</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Right: Run button -->
+      <div>
+        <button class="run-btn" id="runBtn" onclick="runAnalysis()">
+          <span class="btn-icon">⚡</span>
+          <div class="spinner"></div>
+          Run Analysis
+        </button>
+      </div>
+    </div>
+    <div class="error-banner" id="errorBanner"></div>
+  </div>
+
+  <!-- ── Super-Traders ───────────────────────────────────────────────────── -->
+  <div class="section-block" id="superSection" style="display:none;">
+    <p class="section-title">⭐ Super-Traders</p>
+    <div class="section-heading">Overlapping Top Performers</div>
+    <p class="section-sub">Traders present across multiple leaderboards simultaneously — a strong signal of consistent edge.</p>
+    <div class="cards-grid" id="cardsGrid"></div>
+  </div>
+
+  <!-- ── Efficiency Ranking ──────────────────────────────────────────────── -->
+  <div class="section-block" id="rankSection" style="display:none;">
+    <p class="section-title">📈 Efficiency Ranking</p>
+    <div class="section-heading">Trader Efficiency — Return on Volume</div>
+    <p class="section-sub">Traders ranked by RoV (PnL ÷ Volume × 100). Higher RoV = more profit extracted per dollar traded.</p>
+
+    <div class="filter-row">
+      <span class="filter-label">Filter:</span>
+      <button class="filter-chip active" data-f="all"   onclick="setFilter('all')">All</button>
+      <button class="filter-chip human"  data-f="human" onclick="setFilter('human')">🟢 Human</button>
+      <button class="filter-chip bot"    data-f="bot"   onclick="setFilter('bot')">🔴 Bot</button>
+
+      <span class="filter-label" style="margin-left:12px;">Leaderboard:</span>
+      <div id="lbFilterChips" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+    </div>
+
+    <div class="table-wrap">
+      <table id="rankTable">
+        <thead>
+          <tr>
+            <th onclick="sortTable('rank')"           data-col="rank">           # <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('user_name')"      data-col="user_name">      Trader <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('is_bot')"         data-col="is_bot">         Type <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('lists')"          data-col="lists">          Leaderboards <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('trades_per_day')" data-col="trades_per_day"> TPD <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('rov_percentage')" data-col="rov_percentage"> RoV % <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('pnl')"            data-col="pnl">            PnL <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('vol')"            data-col="vol">            Volume <span class="sort-icon">↕</span></th>
+            <th>Profile</th>
+          </tr>
+        </thead>
+        <tbody id="rankBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Initial empty state ────────────────────────────────────────────── -->
+  <div id="initialState" style="margin-top:80px;">
+    <div class="empty-state">
+      <div class="icon">🎯</div>
+      <p>Configure your parameters above and click <strong>Run Analysis</strong> to begin.</p>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+  // ── State ─────────────────────────────────────────────────────────────────
+  const state = {
+    selectedCats:    new Set(['CRYPTO']),
+    selectedPeriods: new Set(['ALL', 'MONTH']),
+    limit: 10,
+    orderBy: 'PNL',
+    filter: 'all',
+    lbFilter: 'all',
+    sortCol: 'rov_percentage',
+    sortDir: -1,   // -1 = desc, 1 = asc
+    data: null,
+  };
+
+  const CATEGORIES = ['OVERALL','POLITICS','SPORTS','CRYPTO','CULTURE','MENTIONS','WEATHER','ECONOMICS','TECH','FINANCE'];
+  const PERIODS     = ['DAY','WEEK','MONTH','ALL'];
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  function init() {
+    // Categories
+    const catEl = document.getElementById('catPills');
+    CATEGORIES.forEach(c => {
+      const p = makePill(c, state.selectedCats.has(c), () => toggle(state.selectedCats, c, p));
+      catEl.appendChild(p);
+    });
+
+    // Periods
+    const pEl = document.getElementById('periodPills');
+    PERIODS.forEach(p => {
+      const el = makePill(p, state.selectedPeriods.has(p), () => toggle(state.selectedPeriods, p, el));
+      pEl.appendChild(el);
+    });
+
+    // Slider
+    const slider = document.getElementById('limitSlider');
+    slider.addEventListener('input', () => {
+      state.limit = +slider.value;
+      document.getElementById('limitVal').textContent = slider.value;
+    });
+
+    // OrderBy
+    document.getElementById('orderBySelect').addEventListener('change', e => {
+      state.orderBy = e.target.value;
+    });
+  }
+
+  function makePill(label, active, onClick) {
+    const el = document.createElement('div');
+    el.className = 'pill' + (active ? ' active' : '');
+    el.textContent = label;
+    el.addEventListener('click', onClick);
+    return el;
+  }
+
+  function toggle(set, val, el) {
+    if (set.has(val)) {
+      if (set.size === 1) return; // keep at least one
+      set.delete(val);
+      el.classList.remove('active');
+    } else {
+      set.add(val);
+      el.classList.add('active');
+    }
+  }
+
+  // ── Run Analysis ──────────────────────────────────────────────────────────
+  async function runAnalysis() {
+    const btn = document.getElementById('runBtn');
+    const badge = document.getElementById('statusBadge');
+    const errBanner = document.getElementById('errorBanner');
+
+    btn.classList.add('loading');
+    btn.disabled = true;
+    badge.textContent = 'Running…';
+    badge.style.color = '#fbbf24';
+    errBanner.style.display = 'none';
+    document.getElementById('initialState').style.display = 'none';
+
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          categories: [...state.selectedCats],
+          periods:    [...state.selectedPeriods],
+          limit:      state.limit,
+          order_by:   state.orderBy,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      state.data = await res.json();
+      renderAll();
+      badge.textContent = `${state.data.ranking.length} traders · ${new Date().toLocaleTimeString()}`;
+      badge.style.color = '';
+    } catch (err) {
+      errBanner.textContent = '⚠ ' + err.message;
+      errBanner.style.display = 'block';
+      badge.textContent = 'Error';
+      badge.style.color = '#ef4444';
+    } finally {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  function renderAll() {
+    renderCards();
+    buildLbFilter();
+    renderTable();
+  }
+
+  // Super-trader cards
+  function renderCards() {
+    const grid = document.getElementById('cardsGrid');
+    const section = document.getElementById('superSection');
+    grid.innerHTML = '';
+    const traders = state.data.overlapping;
+
+    if (!traders.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    traders.forEach((t, i) => {
+      const card = document.createElement('div');
+      card.className = 'trader-card';
+      card.style.animationDelay = `${i * 0.07}s`;
+
+      const initials = (t.user_name || '?').slice(0, 2).toUpperCase();
+      const avatarHTML = t.profile_image
+        ? `<div class="avatar"><img src="${t.profile_image}" onerror="this.parentNode.textContent='${initials}'" /></div>`
+        : `<div class="avatar">${initials}</div>`;
+
+      const verBadge = t.verified_badge ? `<span class="verified-badge" data-tip="Verified">✅</span>` : '';
+      const walletShort = `${t.proxy_wallet.slice(0,6)}…${t.proxy_wallet.slice(-4)}`;
+      const pnlClass = t.pnl >= 0 ? 'pos' : 'neg';
+      const pnlStr = `${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}`;
+      const listChips = t.lists.map(l => `<span class="list-chip">${l}</span>`).join('');
+      const twitterLink = t.x_username
+        ? `<a href="https://x.com/${t.x_username}" target="_blank" rel="noreferrer" style="color:var(--text3);font-size:0.7rem;text-decoration:none;">@${t.x_username}</a>`
+        : '';
+
+      card.innerHTML = `
+        <div class="card-header">
+          ${avatarHTML}
+          <div class="card-name-block">
+            <div class="card-name"><span class="star-icon">⭐</span>${t.user_name}</div>
+            <div class="card-wallet">${walletShort}</div>
+            ${twitterLink}
+          </div>
+          ${verBadge}
+        </div>
+        <div class="card-row">
+          <span class="card-key">PnL</span>
+          <span class="card-val ${pnlClass}">${pnlStr}</span>
+        </div>
+        <div class="card-row">
+          <span class="card-key">Volume</span>
+          <span class="card-val">${fmt(t.vol)}</span>
+        </div>
+        <div class="lists-row">${listChips}</div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  // Build leaderboard filter chips
+  function buildLbFilter() {
+    const container = document.getElementById('lbFilterChips');
+    container.innerHTML = '';
+    const allLists = new Set();
+    (state.data.ranking || []).forEach(r => (r.lists || []).forEach(l => allLists.add(l)));
+
+    const makeChip = (label, val) => {
+      const c = document.createElement('button');
+      c.className = 'filter-chip' + (state.lbFilter === val ? ' active' : '');
+      c.textContent = label;
+      c.addEventListener('click', () => {
+        state.lbFilter = val;
+        document.querySelectorAll('#lbFilterChips .filter-chip').forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+        renderTable();
+      });
+      return c;
+    };
+
+    container.appendChild(makeChip('All', 'all'));
+    allLists.forEach(l => container.appendChild(makeChip(l, l)));
+  }
+
+  // Table
+  function setFilter(f) {
+    state.filter = f;
+    document.querySelectorAll('.filter-chip[data-f]').forEach(c => {
+      c.classList.toggle('active', c.dataset.f === f);
+    });
+    renderTable();
+  }
+
+  function sortTable(col) {
+    if (state.sortCol === col) {
+      state.sortDir *= -1;
+    } else {
+      state.sortCol = col;
+      state.sortDir = col === 'rank' ? 1 : -1;
+    }
+    document.querySelectorAll('thead th').forEach(th => {
+      th.classList.toggle('sorted', th.dataset.col === col);
+    });
+    renderTable();
+  }
+
+  function renderTable() {
+    const section = document.getElementById('rankSection');
+    const tbody = document.getElementById('rankBody');
+    tbody.innerHTML = '';
+    if (!state.data || !state.data.ranking.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    let rows = [...state.data.ranking];
+
+    // Type filter
+    if (state.filter === 'bot')   rows = rows.filter(r => r.is_bot);
+    if (state.filter === 'human') rows = rows.filter(r => !r.is_bot);
+
+    // LB filter
+    if (state.lbFilter !== 'all') rows = rows.filter(r => r.lists.includes(state.lbFilter));
+
+    // Sort
+    const col = state.sortCol;
+    rows.sort((a, b) => {
+      let va = a[col], vb = b[col];
+      if (col === 'lists') { va = va.length; vb = vb.length; }
+      if (col === 'user_name') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+      if (va < vb) return state.sortDir;
+      if (va > vb) return -state.sortDir;
+      return 0;
+    });
+
+    rows.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      tr.style.animationDelay = `${i * 0.04}s`;
+
+      const rank     = r.rank;
+      const initials = (r.user_name || '?').slice(0,2).toUpperCase();
+      const avatarHTML = r.profile_image
+        ? `<div class="t-avatar"><img src="${r.profile_image}" onerror="this.parentNode.textContent='${initials}'" /></div>`
+        : `<div class="t-avatar">${initials}</div>`;
+
+      const typeHTML = r.is_bot
+        ? `<span class="type-badge bot"><span class="dot"></span>BOT</span>`
+        : `<span class="type-badge human"><span class="dot"></span>HUMAN</span>`;
+
+      const lbChips = (r.lists || []).map(l => `<span class="lb-chip">${l}</span>`).join('');
+      const rovClass = r.rov_percentage > 5 ? 'high' : r.rov_percentage > 1 ? 'med' : 'low';
+      const pnlClass = r.pnl >= 0 ? 'pos-val' : 'neg-val';
+
+      const xLink = r.x_username
+        ? `<div class="t-handle"><a href="https://x.com/${r.x_username}" target="_blank" rel="noreferrer" style="color:var(--text3);text-decoration:none;">@${r.x_username}</a></div>`
+        : '';
+
+      const tipText = r.classification ? r.classification.replace(/'/g, '&#39;') : '';
+
+      tr.innerHTML = `
+        <td><span class="rank-num ${rank <= 3 ? 'top' : ''}">${rank}</span></td>
+        <td>
+          <div class="trader-cell">
+            ${avatarHTML}
+            <div>
+              <div class="t-name">${r.verified_badge ? '✅ ' : ''}${escHtml(r.user_name)}</div>
+              ${xLink}
+            </div>
+          </div>
+        </td>
+        <td>${typeHTML}</td>
+        <td><div class="lb-chips">${lbChips}</div></td>
+        <td><span class="mono">${r.trades_per_day.toLocaleString()}</span></td>
+        <td><span class="mono rov-val ${rovClass}">${r.rov_percentage.toFixed(2)}%</span></td>
+        <td><span class="mono ${pnlClass}">${r.pnl >= 0 ? '+' : ''}${fmt(r.pnl)}</span></td>
+        <td><span class="mono">${fmt(r.vol)}</span></td>
+        <td><span class="classification-text" data-tip="${tipText}">${escHtml(r.classification || '—')}</span></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  function fmt(n) {
+    if (Math.abs(n) >= 1_000_000) return `$${(n/1_000_000).toFixed(2)}M`;
+    if (Math.abs(n) >= 1_000)    return `$${(n/1_000).toFixed(1)}K`;
+    return `$${n.toFixed(0)}`;
+  }
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  init();
+</script>
+</body>
+</html>
