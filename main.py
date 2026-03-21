@@ -224,7 +224,7 @@ def _handle_test_command(args: argparse.Namespace) -> None:
             )
             telegram_service.send_message(f"📋 <b>Trying:</b>\n{detail}\n\n⏳ Submitting order...")
 
-            success = execute_copy_trade(candidate, trade_size_usd=1.5)
+            success = execute_copy_trade(candidate)
             if success:
                 telegram_service.send_test_result(True, detail)
                 return
@@ -368,7 +368,7 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
             # Attempt to copy the trade
             logger.info("Initiating copy-trade execution...")
             try:
-                executed = execute_copy_trade(trade, trade_size_usd=1.5)
+                executed = execute_copy_trade(trade)
                 if not executed:
                     logger.warning("Copy-trade was not submitted for: %s", trade.title[:60])
             except Exception as e:

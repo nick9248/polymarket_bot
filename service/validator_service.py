@@ -16,10 +16,14 @@ def validate_own_trades(limit: int = 5):
     """
     Fetches the recent trades from our OWN proxy wallet to validate execution.
     Prints out exactly what our bot has executed on-chain.
+
+    Uses poly_funder_address (the proxy/maker wallet) because that is the address
+    recorded as the maker on every order we submit.  poly_address is just the EOA
+    signer — it never appears as the trading wallet in the Data API.
     """
-    wallet = os.getenv("poly_address", "").strip(" '\"")
+    wallet = os.getenv("poly_funder_address", "").strip(" '\"")
     if not wallet:
-        logger.error("Validation skipped: No poly_address found in .env")
+        logger.error("Validation skipped: No poly_funder_address found in .env")
         return
         
     logger.info("=" * 60)

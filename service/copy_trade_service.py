@@ -1,7 +1,10 @@
 """
 copy_trade_service.py
 Service for executing automated copy-trades using Polymarket CLOB.
-Mirrors signals at a fixed initial entry size of exactly $1.50.
+
+Order size = CLOB per-market minimum shares at the current market ask price.
+A slippage guard skips trades where the market has moved more than
+MAX_SLIPPAGE_PCT from the original signal price since coinman detected it.
 """
 
 import logging
@@ -20,95 +23,118 @@ from utility.geo import is_in_spain
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Signature types:
-#   0 = EOA (MetaMask / direct private-key wallet, signer == funder)
-#   1 = POLY_PROXY (Magic/email wallet; signer=EOA, funder=proxy contract — must differ)
-#
-# Which to use depends on the wallet type:
-#   - poly_funder_address set AND different from derived EOA → use POLY_PROXY (1)
-#   - poly_funder_address missing or same as derived EOA → fall back to EOA (0)
 _CLOB_HOST = "https://clob.polymarket.com"
 _POLYGON_CHAIN_ID = 137
+_DEFAULT_MIN_ORDER_SIZE = 5  # fallback if market lookup fails
+
+# Maximum allowed price movement between signal price and current market price.
+# With 5-second polling, slippage is usually < 2%. 10% flags something unusual
+# (e.g. a stale trade detected late, or a fast-moving illiquid market).
+_MAX_SLIPPAGE_PCT = 10.0
 
 
 def _get_client() -> ClobClient:
     """
-    Returns an authenticated ClobClient.
+    Returns an authenticated ClobClient using POLY_PROXY mode (signature_type=1).
 
-    Selects signature type automatically:
-    - If poly_funder_address is configured AND differs from the derived signing address,
-      uses POLY_PROXY (type=1) with the funder set to poly_funder_address.
-    - Otherwise uses EOA (type=0) with no separate funder.
+    poly_private_key  → EOA signer.
+    poly_funder_address → proxy wallet (maker); holds USDC; must differ from signer.
+    CLOB rejects maker==signer with "invalid signature"; type=0 has no USDC balance.
     """
     pk = os.getenv("poly_private_key", "").strip(" '\"")
     funder = os.getenv("poly_funder_address", "").strip(" '\"")
-
     if not pk:
         raise ValueError("Missing poly_private_key in .env")
-
-    # Derive the signing address to detect same-address situations
-    from eth_account import Account
-    signing_address = Account.from_key(pk).address.lower()
-    funder_lower = funder.lower() if funder else ""
-
-    if funder and funder_lower != signing_address:
-        # Magic/email wallet: proxy contract is the funder, EOA private key signs
-        logger.info("Wallet mode: POLY_PROXY — signer=%s, funder=%s", signing_address, funder_lower)
-        sig_type = 1
-    else:
-        if funder and funder_lower == signing_address:
-            logger.warning(
-                "poly_funder_address matches signing address (%s) — "
-                "POLY_PROXY requires them to differ. Falling back to EOA mode. "
-                "If this is a Magic/email wallet, set poly_funder_address to the "
-                "proxy contract address (different from your signing key's address).",
-                signing_address,
-            )
-        else:
-            logger.info("Wallet mode: EOA — signing address=%s (no separate funder)", signing_address)
-        sig_type = 0
-        funder = None
+    if not funder:
+        raise ValueError(
+            "Missing poly_funder_address in .env — required for POLY_PROXY order signing"
+        )
 
     client = ClobClient(
         host=_CLOB_HOST,
         key=pk,
         chain_id=_POLYGON_CHAIN_ID,
-        signature_type=sig_type,
-        funder=funder if funder else None,
+        signature_type=1,
+        funder=funder,
     )
     creds = client.create_or_derive_api_creds()
     client.set_api_creds(creds)
     return client
 
 
-def _get_usdc_balance(client: ClobClient) -> float:
-    """
-    Fetch available USDC balance for the proxy wallet.
-    Returns 0.0 if the balance cannot be determined.
-    """
+def _get_usdc_balance(pk: str) -> float:
+    """Returns available USDC balance from the POLY_PROXY pool (signature_type=1)."""
     try:
+        balance_client = ClobClient(
+            host=_CLOB_HOST,
+            key=pk,
+            chain_id=_POLYGON_CHAIN_ID,
+            signature_type=1,
+        )
+        creds = balance_client.create_or_derive_api_creds()
+        balance_client.set_api_creds(creds)
         params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-        resp = client.get_balance_allowance(params)
+        resp = balance_client.get_balance_allowance(params)
         raw = resp.get("balance", "0")
-        return float(raw) / 1_000_000  # USDC has 6 decimals on Polygon
+        return float(raw) / 1_000_000
     except Exception as e:
         logger.warning("Could not fetch USDC balance: %s", e)
         return 0.0
 
 
-def execute_copy_trade(trade: TradeEntry, trade_size_usd: float = 1.5) -> bool:
+def _get_min_order_size(client: ClobClient, condition_id: str) -> int:
+    """Returns the CLOB minimum order size (shares) for the market, or the default."""
+    if not condition_id:
+        return _DEFAULT_MIN_ORDER_SIZE
+    try:
+        market = client.get_market(condition_id)
+        return int(market.get("minimum_order_size", _DEFAULT_MIN_ORDER_SIZE))
+    except Exception as e:
+        logger.warning(
+            "Could not fetch minimum_order_size for %s: %s — using default %d",
+            condition_id, e, _DEFAULT_MIN_ORDER_SIZE,
+        )
+        return _DEFAULT_MIN_ORDER_SIZE
+
+
+def _get_current_market_price(client: ClobClient, token_id: str, side: str) -> float | None:
+    """
+    Fetch current best ask (BUY) or best bid (SELL) from the live order book.
+
+    Using live price instead of the stale signal price ensures orders fill
+    immediately as taker orders.  Returns None if the book is empty or unavailable.
+    """
+    try:
+        book = client.get_order_book(token_id)
+        if side.upper() == "BUY":
+            prices = sorted([float(a.price) for a in book.asks]) if book.asks else []
+        else:
+            prices = sorted([float(b.price) for b in book.bids], reverse=True) if book.bids else []
+        return prices[0] if prices else None
+    except Exception as e:
+        logger.warning("Could not fetch order book for token %s: %s", token_id[:20], e)
+        return None
+
+
+def execute_copy_trade(trade: TradeEntry) -> bool:
     """
     Executes a mirrored trade on the Polymarket CLOB API.
 
+    Places a taker order at the current best ask/bid price for the market minimum
+    number of shares.  Skips if the market has moved more than _MAX_SLIPPAGE_PCT
+    from the signal price, or if the current price is near-expiry (outside 0.15–0.85).
+
     Args:
-        trade: The parsed TradeEntry to copy.
-        trade_size_usd: Fixed flat USD size to deploy on the trade (default $1.50).
+        trade: The parsed TradeEntry signal to copy.
 
     Returns:
-        True if order successfully submitted, False otherwise.
+        True if order successfully submitted and matched, False otherwise.
     """
     logger.info("=== PREPARING COPY TRADE ===")
-    logger.info("Target: %s | %s | %s @ $%.4f", trade.title, trade.side, trade.outcome, trade.price)
+    logger.info(
+        "Signal: %s | %s | %s @ $%.4f (historical)",
+        trade.title, trade.side, trade.outcome, trade.price,
+    )
 
     if not is_in_spain():
         logger.error("Execution blocked: Geo location is not Spain (ES).")
@@ -116,62 +142,96 @@ def execute_copy_trade(trade: TradeEntry, trade_size_usd: float = 1.5) -> bool:
 
     token_id = trade.asset
     if not token_id:
-        logger.error("Execution blocked: No asset/token_id on trade for condition_id=%s", trade.condition_id)
-        return False
-
-    # Price must be in the valid Polymarket range (exclusive of 0, inclusive of 1)
-    if trade.price <= 0.0 or trade.price > 1.0:
-        logger.error("Execution blocked: Invalid trade price %.6f (must be 0 < price <= 1.0)", trade.price)
-        return False
-
-    # Skip near-expiry markets: price > 0.85 or < 0.15 means the market is almost resolved.
-    # Polymarket's CLOB closes order submission on these markets before resolution,
-    # causing guaranteed 404 "market not found" rejections.
-    if trade.price > 0.85 or trade.price < 0.15:
-        logger.warning(
-            "Skipping near-expiry market (price=%.3f). CLOB likely closed for new orders: %s",
-            trade.price, trade.title[:60],
+        logger.error(
+            "Execution blocked: No asset/token_id on trade for condition_id=%s",
+            trade.condition_id,
         )
         return False
 
-    shares_to_buy = round(trade_size_usd / trade.price, 4)
-    if shares_to_buy < 0.01:
-        logger.error("Execution blocked: Calculated shares %.4f too small for $%.2f at price %.4f",
-                     shares_to_buy, trade_size_usd, trade.price)
+    if trade.price <= 0.0 or trade.price > 1.0:
+        logger.error("Execution blocked: Invalid historical signal price %.6f", trade.price)
         return False
 
     try:
+        pk = os.getenv("poly_private_key", "").strip(" '\"")
         client = _get_client()
 
-        # Balance check — ensure we have enough USDC before placing the order
-        balance = _get_usdc_balance(client)
-        if balance < trade_size_usd:
+        # ── Current market price ───────────────────────────────────────────────
+        current_price = _get_current_market_price(client, token_id, trade.side)
+        if current_price is None:
             logger.error(
-                "Execution blocked: Insufficient USDC balance. Need $%.2f, have $%.2f",
-                trade_size_usd, balance,
+                "Execution blocked: Order book empty or market closed: %s",
+                trade.title[:60],
             )
             return False
-        logger.info("Balance check passed: $%.2f available, deploying $%.2f", balance, trade_size_usd)
 
+        # ── Slippage guard ─────────────────────────────────────────────────────
+        # With 5s polling the gap is usually < 2%. A larger gap means the trade
+        # was detected late or the market moved unusually fast — skip to avoid
+        # buying at a significantly worse price than the signal.
+        slippage_pct = abs(current_price - trade.price) / trade.price * 100
+        if slippage_pct > _MAX_SLIPPAGE_PCT:
+            logger.warning(
+                "Skipping: slippage %.1f%% exceeds %.0f%% threshold "
+                "(signal $%.3f → current $%.3f): %s",
+                slippage_pct, _MAX_SLIPPAGE_PCT,
+                trade.price, current_price, trade.title[:60],
+            )
+            return False
+
+        logger.info(
+            "Current market price: $%.4f  (signal: $%.4f, slippage: %.1f%%)",
+            current_price, trade.price, slippage_pct,
+        )
+
+        # ── Near-expiry filter on current price ────────────────────────────────
+        if current_price > 0.85 or current_price < 0.15:
+            logger.warning(
+                "Skipping: current price %.3f is near-expiry (need 0.15–0.85): %s",
+                current_price, trade.title[:60],
+            )
+            return False
+
+        # ── Minimum order size ─────────────────────────────────────────────────
+        min_size = _get_min_order_size(client, trade.condition_id)
+        order_cost = min_size * current_price
+
+        # ── Balance check ──────────────────────────────────────────────────────
+        balance = _get_usdc_balance(pk)
+        if balance < order_cost:
+            logger.error(
+                "Execution blocked: Insufficient USDC. Need $%.2f (%d shares × $%.3f), have $%.2f",
+                order_cost, min_size, current_price, balance,
+            )
+            return False
+
+        logger.info(
+            "Balance OK: $%.2f available | deploying %d shares @ $%.4f = $%.2f",
+            balance, min_size, current_price, order_cost,
+        )
+
+        # ── Submit taker order ─────────────────────────────────────────────────
         order_side = BUY if trade.side.upper() == "BUY" else SELL
-
         args = OrderArgs(
             token_id=token_id,
-            price=round(trade.price, 3),
-            size=shares_to_buy,
+            price=round(current_price, 2),
+            size=float(min_size),
             side=order_side,
         )
 
         logger.info(
-            "Submitting Limit Order: Side=%s, Price=$%.3f, Shares=%.4f (~$%.2f)",
-            order_side, args.price, args.size, args.price * args.size,
+            "Submitting: %s %d shares @ $%.4f (~$%.2f)",
+            order_side, min_size, args.price, args.price * args.size,
         )
 
         signed_order = client.create_order(args)
         resp = client.post_order(signed_order)
 
         if resp.get("success"):
-            logger.info("COPY TRADE SUBMITTED! OrderID: %s", resp.get("orderID"))
+            logger.info(
+                "COPY TRADE SUBMITTED! OrderID=%s status=%s",
+                resp.get("orderID"), resp.get("status"),
+            )
             return True
         else:
             logger.error("COPY TRADE REJECTED: %s", resp)
@@ -180,8 +240,7 @@ def execute_copy_trade(trade: TradeEntry, trade_size_usd: float = 1.5) -> bool:
     except PolyApiException as e:
         if e.status_code == 404:
             logger.warning(
-                "CLOB market not found (404) — market already closed for trading: %s",
-                trade.title[:60],
+                "CLOB market not found (404) — market already closed: %s", trade.title[:60]
             )
         else:
             logger.error("CLOB API error (status=%s): %s", e.status_code, e)

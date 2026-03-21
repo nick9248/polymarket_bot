@@ -73,6 +73,16 @@ The Polymarket `/trades` API returns an `asset` field which is the exact CLOB to
 ### Near-expiry filter:
 Markets with `price > 0.85 or price < 0.15` are skipped — CLOB closes order books near resolution (returns 404 on tick-size endpoint).
 
+### CLOB minimum order size:
+Each market has a `minimum_order_size` (shares, not USD). Confirmed at 5 shares for ETH price markets. `copy_trade_service` fetches it via `client.get_market(condition_id)` and bumps order size to the minimum if `trade_size_usd / price` falls short. Balance is checked against the actual (bumped) USD amount.
+
+### CLOB authentication — account type:
+This account uses **POLY_PROXY (signature_type=1)** with a separate proxy wallet:
+- `poly_private_key` = EOA (signer, derives to `poly_address`)
+- `poly_funder_address` = proxy/maker contract (holds USDC; this is the `maker` in EIP-712 orders)
+- CLOB requires `maker ≠ signer`; orders with `maker == signer` are rejected with "invalid signature"
+- type=0 (pure EOA) has $0 on-chain balance — all USDC is in the proxy pool (type=1)
+
 ## Database
 
 PostgreSQL. Three tables managed by `core/database/connection.py`:
