@@ -15,6 +15,7 @@ from flask_cors import CORS
 from utility.logger import init_logging
 from utility.constants import Category, TimePeriod, OrderBy
 from service import leaderboard_service, trades_service
+from core.api import polymarket_client
 from analysis.analyzer import Analyzer
 from analysis.strategy import StrategyAnalyzer
 
@@ -112,12 +113,13 @@ def run_analysis():
         for t in overlapping
     ]
 
-    # ── Efficiency ranking + bot detection ────────────────────────────────────
+    # ── Efficiency ranking + bot detection + quality metrics ──────────────────
     ranked = Analyzer.get_efficiency_ranking(wallets)
     for res in ranked:
         trader = res["trader"]
+        wallet = trader.proxy_wallet
         try:
-            trades = trades_service.fetch_user_trades(trader.proxy_wallet, limit=500)
+            trades    = trades_service.fetch_user_trades(wallet, limit=500)
             bot_check = Analyzer.detect_hft_patterns(trades)
             positions = StrategyAnalyzer.extract_positions(trades)
             profile   = StrategyAnalyzer.determine_profile(bot_check, positions)
@@ -125,31 +127,71 @@ def run_analysis():
             bot_check = {"is_bot_likely": False, "reasons": [], "frequency_stats": {"trades_per_day": 0}}
             profile   = {"classification": "Unknown", "description": "", "tpd": 0, "is_bot": False}
 
-        res["bot_check"] = bot_check
-        res["profile"]   = profile
+        try:
+            closed   = polymarket_client.get_user_closed_positions(wallet, max_results=500)
+            open_pos = polymarket_client.get_user_positions(wallet)
+            activity = polymarket_client.get_user_activity(wallet, limit=500)
+            quality      = Analyzer.analyze_closed_positions(closed)
+            open_stats   = Analyzer.analyze_open_positions(open_pos)
+            activity_stats = Analyzer.analyze_activity(activity)
+        except Exception:
+            quality        = {"closed_position_count": 0, "confidence_tier": "unknown",
+                              "realized_win_rate": 0, "total_realized_pnl": 0,
+                              "total_invested_closed": 0, "realized_rov": 0,
+                              "avg_roi_per_position": 0, "median_roi_per_position": 0}
+            open_stats     = {"open_position_count": 0, "total_open_exposure": 0,
+                              "total_unrealized_pnl": 0, "redeemable_count": 0, "mergeable_count": 0}
+            activity_stats = {"redeem_count": 0, "total_redeemed_usdc": 0,
+                              "merge_count": 0, "split_count": 0, "arb_signal": False}
+
+        res["bot_check"]      = bot_check
+        res["profile"]        = profile
+        res["quality"]        = quality
+        res["open_stats"]     = open_stats
+        res["activity_stats"] = activity_stats
 
     ranking_out = []
     for i, res in enumerate(ranked, 1):
         t   = res["trader"]
         bc  = res["bot_check"]
         pf  = res["profile"]
+        q   = res["quality"]
+        os_ = res["open_stats"]
+        act = res["activity_stats"]
         tpd = bc.get("frequency_stats", {}).get("trades_per_day", 0.0)
         ranking_out.append({
-            "rank":             i,
-            "user_name":        t.user_name,
-            "proxy_wallet":     t.proxy_wallet,
-            "x_username":       t.x_username,
-            "profile_image":    t.profile_image,
-            "verified_badge":   t.verified_badge,
-            "lists":            getattr(t, "lists", []),
-            "pnl":              t.pnl,
-            "vol":              t.vol,
-            "rov_percentage":   res["rov_percentage"],
-            "is_bot":           bc.get("is_bot_likely", False),
-            "trades_per_day":   round(tpd, 1),
-            "classification":   pf.get("classification", ""),
-            "description":      pf.get("description", ""),
-            "bot_reasons":      bc.get("reasons", []),
+            "rank":                    i,
+            "user_name":               t.user_name,
+            "proxy_wallet":            t.proxy_wallet,
+            "x_username":              t.x_username,
+            "profile_image":           t.profile_image,
+            "verified_badge":          t.verified_badge,
+            "lists":                   getattr(t, "lists", []),
+            "pnl":                     t.pnl,
+            "vol":                     t.vol,
+            "rov_percentage":          res["rov_percentage"],
+            "is_bot":                  bc.get("is_bot_likely", False),
+            "trades_per_day":          round(tpd, 1),
+            "classification":          pf.get("classification", ""),
+            "description":             pf.get("description", ""),
+            "bot_reasons":             bc.get("reasons", []),
+            # Quality metrics
+            "closed_position_count":   q["closed_position_count"],
+            "confidence_tier":         q["confidence_tier"],
+            "realized_win_rate":       round(q["realized_win_rate"] * 100, 1),
+            "total_realized_pnl":      round(q["total_realized_pnl"], 2),
+            "realized_rov":            round(q["realized_rov"], 2),
+            "avg_roi_per_position":    round(q["avg_roi_per_position"], 1),
+            "median_roi_per_position": round(q["median_roi_per_position"], 1),
+            # Exposure
+            "open_position_count":     os_["open_position_count"],
+            "total_open_exposure":     round(os_["total_open_exposure"], 2),
+            "total_unrealized_pnl":    round(os_["total_unrealized_pnl"], 2),
+            # Activity
+            "redeem_count":            act["redeem_count"],
+            "total_redeemed_usdc":     round(act["total_redeemed_usdc"], 2),
+            "arb_signal":              act["arb_signal"],
+            "merge_count":             act["merge_count"],
         })
 
     return jsonify({"overlapping": overlapping_out, "ranking": ranking_out})
