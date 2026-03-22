@@ -499,6 +499,38 @@
       max-width: 200px;
     }
 
+    /* ── Quality table badges ───────────────────────────────────────────────── */
+    .conf-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 100px;
+    }
+    .conf-badge.high         { background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); color: #6ee7b7; }
+    .conf-badge.moderate     { background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.35); color: #fbbf24; }
+    .conf-badge.low          { background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.35); color: #fb923c; }
+    .conf-badge.insufficient { background: rgba(239,68,68,0.1);   border: 1px solid rgba(239,68,68,0.3);   color: #fca5a5; }
+    .conf-badge.unknown      { background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.2); color: var(--text3); }
+
+    .arb-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      border-radius: 100px;
+    }
+    .arb-badge.yes { background: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.35); color: var(--gold2); }
+    .arb-badge.no  { background: transparent; color: var(--text3); border: 1px solid var(--border); }
+
+    .winrate-val { font-weight: 700; }
+    .winrate-val.great { color: var(--green); }
+    .winrate-val.good  { color: var(--gold2); }
+    .winrate-val.poor  { color: var(--text2); }
+
     /* ── Scrollbar ─────────────────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -639,6 +671,32 @@
     </div>
   </div>
 
+  <!-- ── Quality Ranking ────────────────────────────────────────────────── -->
+  <div class="section-block" id="qualitySection" style="display:none;">
+    <p class="section-title">🎯 Quality Ranking</p>
+    <div class="section-heading">Realized Performance — Ground Truth Metrics</div>
+    <p class="section-sub">Ranked by realized win rate + realized RoV using Polymarket's own closed-position data. Excludes unrealized mark-to-market gains.</p>
+
+    <div class="table-wrap">
+      <table id="qualityTable">
+        <thead>
+          <tr>
+            <th onclick="sortQuality('_qrank')"                data-qcol="_qrank">            # <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('user_name')"             data-qcol="user_name">         Trader <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('confidence_tier')"       data-qcol="confidence_tier">   Confidence <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('realized_win_rate')"     data-qcol="realized_win_rate"> Win Rate <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('realized_rov')"          data-qcol="realized_rov">      Realized RoV <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('median_roi_per_position')" data-qcol="median_roi_per_position"> Median ROI <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('total_realized_pnl')"   data-qcol="total_realized_pnl"> Realized PnL <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('total_open_exposure')"   data-qcol="total_open_exposure"> Open Exposure <span class="sort-icon">↕</span></th>
+            <th onclick="sortQuality('arb_signal')"            data-qcol="arb_signal">        Arb <span class="sort-icon">↕</span></th>
+          </tr>
+        </thead>
+        <tbody id="qualityBody"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ── Initial empty state ────────────────────────────────────────────── -->
   <div id="initialState" style="margin-top:80px;">
     <div class="empty-state">
@@ -660,6 +718,8 @@
     lbFilter: 'all',
     sortCol: 'rov_percentage',
     sortDir: -1,   // -1 = desc, 1 = asc
+    qSortCol: 'realized_win_rate',
+    qSortDir: -1,
     data: null,
   };
 
@@ -762,6 +822,7 @@
     renderCards();
     buildLbFilter();
     renderTable();
+    renderQualityTable();
   }
 
   // Super-trader cards
@@ -932,6 +993,110 @@
         <td><span class="mono ${pnlClass}">${r.pnl >= 0 ? '+' : ''}${fmt(r.pnl)}</span></td>
         <td><span class="mono">${fmt(r.vol)}</span></td>
         <td><span class="classification-text" data-tip="${tipText}">${escHtml(r.classification || '—')}</span></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ── Quality Table ─────────────────────────────────────────────────────────
+  const CONF_ORDER = { high: 4, moderate: 3, low: 2, insufficient: 1, unknown: 0 };
+
+  function sortQuality(col) {
+    if (state.qSortCol === col) {
+      state.qSortDir *= -1;
+    } else {
+      state.qSortCol = col;
+      state.qSortDir = col === '_qrank' ? 1 : -1;
+    }
+    document.querySelectorAll('#qualityTable thead th').forEach(th => {
+      th.classList.toggle('sorted', th.dataset.qcol === col);
+    });
+    renderQualityTable();
+  }
+
+  function renderQualityTable() {
+    const section = document.getElementById('qualitySection');
+    const tbody   = document.getElementById('qualityBody');
+    tbody.innerHTML = '';
+    if (!state.data || !state.data.ranking.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    // Assign quality rank (default sort: win_rate DESC, realized_rov DESC)
+    const withRank = state.data.ranking
+      .map((r, i) => ({ ...r, _qrank: i + 1 }))
+      .slice()
+      .sort((a, b) => {
+        const wa = a.realized_win_rate, wb = b.realized_win_rate;
+        if (wa !== wb) return wb - wa;
+        return b.realized_rov - a.realized_rov;
+      })
+      .map((r, i) => ({ ...r, _qrank: i + 1 }));
+
+    // Apply sort
+    const col = state.qSortCol;
+    withRank.sort((a, b) => {
+      let va = a[col], vb = b[col];
+      if (col === 'confidence_tier') { va = CONF_ORDER[va] ?? 0; vb = CONF_ORDER[vb] ?? 0; }
+      if (col === 'user_name')       { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+      if (col === 'arb_signal')      { va = va ? 1 : 0; vb = vb ? 1 : 0; }
+      if (va < vb) return state.qSortDir;
+      if (va > vb) return -state.qSortDir;
+      return 0;
+    });
+
+    withRank.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      tr.style.animationDelay = `${i * 0.04}s`;
+
+      const initials   = (r.user_name || '?').slice(0, 2).toUpperCase();
+      const avatarHTML = r.profile_image
+        ? `<div class="t-avatar"><img src="${r.profile_image}" onerror="this.parentNode.textContent='${initials}'" /></div>`
+        : `<div class="t-avatar">${initials}</div>`;
+
+      const confTier   = (r.confidence_tier || 'unknown').toLowerCase();
+      const confBadge  = `<span class="conf-badge ${confTier}">${confTier}</span>`;
+
+      const wr         = r.realized_win_rate;
+      const wrClass    = wr >= 60 ? 'great' : wr >= 50 ? 'good' : 'poor';
+      const wrHTML     = `<span class="mono winrate-val ${wrClass}">${wr.toFixed(1)}%</span>`;
+
+      const rovClass   = r.realized_rov > 5 ? 'high' : r.realized_rov > 0 ? 'med' : 'low';
+      const rovHTML    = `<span class="mono rov-val ${rovClass}">${r.realized_rov.toFixed(1)}%</span>`;
+
+      const medClass   = r.median_roi_per_position > 5 ? 'pos-val' : r.median_roi_per_position < 0 ? 'neg-val' : '';
+      const medHTML    = `<span class="mono ${medClass}">${r.median_roi_per_position.toFixed(1)}%</span>`;
+
+      const rpnlClass  = r.total_realized_pnl >= 0 ? 'pos-val' : 'neg-val';
+      const rpnlHTML   = `<span class="mono ${rpnlClass}">${r.total_realized_pnl >= 0 ? '+' : ''}${fmt(r.total_realized_pnl)}</span>`;
+
+      const expHTML    = `<span class="mono">${fmt(r.total_open_exposure)}</span>`;
+
+      const arbHTML    = r.arb_signal
+        ? `<span class="arb-badge yes">YES</span>`
+        : `<span class="arb-badge no">—</span>`;
+
+      const xLink = r.x_username
+        ? `<div class="t-handle"><a href="https://x.com/${r.x_username}" target="_blank" rel="noreferrer" style="color:var(--text3);text-decoration:none;">@${r.x_username}</a></div>`
+        : '';
+
+      tr.innerHTML = `
+        <td><span class="rank-num ${r._qrank <= 3 ? 'top' : ''}">${r._qrank}</span></td>
+        <td>
+          <div class="trader-cell">
+            ${avatarHTML}
+            <div>
+              <div class="t-name">${r.verified_badge ? '✅ ' : ''}${escHtml(r.user_name)}</div>
+              ${xLink}
+            </div>
+          </div>
+        </td>
+        <td>${confBadge}</td>
+        <td>${wrHTML}</td>
+        <td>${rovHTML}</td>
+        <td>${medHTML}</td>
+        <td>${rpnlHTML}</td>
+        <td>${expHTML}</td>
+        <td>${arbHTML}</td>
       `;
       tbody.appendChild(tr);
     });

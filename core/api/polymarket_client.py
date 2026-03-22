@@ -10,7 +10,7 @@ import logging
 import time
 import requests
 
-from utility.endpoints import LEADERBOARD, BUILDER_LEADERBOARD, TRADES
+from utility.endpoints import LEADERBOARD, BUILDER_LEADERBOARD, TRADES, ACTIVITY, POSITIONS, CLOSED_POSITIONS
 from utility.constants import (
     Category,
     TimePeriod,
@@ -164,6 +164,116 @@ def get_user_trades(wallet: str, limit: int = 5) -> list[dict]:
 
     data = response.json()
     logger.debug("Received %d trades for wallet %s.", len(data), wallet)
+    return data
+
+
+def get_user_positions(wallet: str) -> list[dict]:
+    """
+    Fetch all current open positions for a wallet from the Polymarket Data API.
+
+    Args:
+        wallet: Proxy wallet address (0x-prefixed, 40-hex chars).
+
+    Returns:
+        List of raw position dicts. Each contains size, avgPrice, initialValue,
+        currentValue, cashPnl, percentPnl, totalBought, realizedPnl, curPrice,
+        redeemable, mergeable, conditionId, title, outcome, endDate.
+
+    Raises:
+        requests.HTTPError: If the API returns a non-2xx status.
+        requests.ConnectionError: If the network is unreachable.
+        requests.Timeout: If the request exceeds REQUEST_TIMEOUT_SECONDS.
+    """
+    params = {"user": wallet, "limit": 500}
+
+    logger.debug("Fetching open positions for wallet=%s", wallet)
+
+    response = requests.get(POSITIONS, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+
+    data = response.json()
+    logger.debug("Received %d open positions for wallet %s.", len(data), wallet)
+    return data
+
+
+def get_user_closed_positions(wallet: str, max_results: int = 500) -> list[dict]:
+    """
+    Fetch historical closed positions for a wallet, paginating through all pages.
+
+    The API returns at most 50 per page. Pagination stops when a page returns
+    fewer than 50 items or max_results is reached. Any HTTP error mid-pagination
+    raises immediately — no partial results are returned silently.
+
+    Args:
+        wallet: Proxy wallet address (0x-prefixed, 40-hex chars).
+        max_results: Maximum total closed positions to retrieve.
+
+    Returns:
+        List of raw closed-position dicts. Each contains realizedPnl, avgPrice,
+        totalBought (in shares), curPrice, conditionId, title, outcome, timestamp.
+
+    Raises:
+        requests.HTTPError: If any page request returns a non-2xx status.
+        requests.ConnectionError: If the network is unreachable.
+        requests.Timeout: If any request exceeds REQUEST_TIMEOUT_SECONDS.
+    """
+    page_size = 50
+    all_positions = []
+    offset = 0
+
+    logger.debug("Fetching closed positions for wallet=%s (max=%d)", wallet, max_results)
+
+    while len(all_positions) < max_results:
+        params = {
+            "user": wallet,
+            "limit": page_size,
+            "offset": offset,
+            "sortBy": "TIMESTAMP",
+            "sortDirection": "DESC",
+        }
+
+        response = requests.get(CLOSED_POSITIONS, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+
+        page = response.json()
+        all_positions.extend(page)
+
+        if len(page) < page_size:
+            break
+
+        offset += page_size
+
+    logger.debug("Received %d closed positions for wallet %s.", len(all_positions), wallet)
+    return all_positions[:max_results]
+
+
+def get_user_activity(wallet: str, limit: int = 500) -> list[dict]:
+    """
+    Fetch on-chain activity events for a wallet from the Polymarket Data API.
+    Includes TRADE, REDEEM, SPLIT, and MERGE event types.
+
+    Args:
+        wallet: Proxy wallet address (0x-prefixed, 40-hex chars).
+        limit: Number of most-recent events to return (max 500).
+
+    Returns:
+        List of raw activity dicts. Each contains type, usdcSize, conditionId,
+        title, timestamp, and (for trades) side, price, size, asset.
+
+    Raises:
+        requests.HTTPError: If the API returns a non-2xx status.
+        requests.ConnectionError: If the network is unreachable.
+        requests.Timeout: If the request exceeds REQUEST_TIMEOUT_SECONDS.
+    """
+    params = {"user": wallet, "limit": limit}
+
+    logger.debug("Fetching activity for wallet=%s limit=%d", wallet, limit)
+
+    response = requests.get(ACTIVITY, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+    response.raise_for_status()
+
+    data = response.json()
+    logger.debug("Received %d activity events for wallet %s.", len(data), wallet)
     return data
 
 
