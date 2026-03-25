@@ -34,7 +34,7 @@ def main():
     for cat in categories:
         for p in periods:
             entries = leaderboard_service.fetch_leaderboard(
-                category=cat, time_period=p, order_by=OrderBy.PNL, limit=10
+                category=cat, time_period=p, order_by=OrderBy.PNL, limit=30
             )
             for e in entries:
                 if e.proxy_wallet not in unique_traders:

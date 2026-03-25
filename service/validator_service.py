@@ -79,11 +79,16 @@ def find_missed_trades(
     if already_executed:
         our_executed |= already_executed
 
-    # Find target trades with no matching execution on our side
-    missed = [
-        t for t in recent_target
-        if (t.asset, t.side) not in our_executed
-    ]
+    # Find target trades with no matching execution on our side.
+    # Deduplicate by (asset, side) — stingo43 may enter the same market multiple
+    # times; we only need one execution per direction to cover the position.
+    seen: set[tuple[str, str]] = set()
+    missed = []
+    for t in recent_target:
+        key = (t.asset, t.side)
+        if key not in our_executed and key not in seen:
+            missed.append(t)
+            seen.add(key)
 
     if missed:
         logger.info(

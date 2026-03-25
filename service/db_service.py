@@ -53,7 +53,7 @@ def persist_leaderboard(
         conn.close()
 
 
-def persist_trades(trades: list[TradeEntry]) -> int:
+def persist_trades(trades: list[TradeEntry]) -> list[TradeEntry]:
     """
     Save trades to the database, skipping any already stored.
 
@@ -61,15 +61,16 @@ def persist_trades(trades: list[TradeEntry]) -> int:
         trades: Trade entries to save.
 
     Returns:
-        Number of NEW trades inserted.
+        List of TradeEntry objects that were actually NEW (inserted for the first time).
     """
     if not trades:
-        return 0
+        return []
     conn = connection.get_connection()
     try:
-        inserted = repository.save_trades(conn, trades)
-        logger.info("Persisted trades: %d new inserted.", inserted)
-        return inserted
+        inserted_hashes = repository.save_trades(conn, trades)
+        new_trades = [t for t in trades if t.transaction_hash in inserted_hashes]
+        logger.info("Persisted trades: %d new inserted.", len(new_trades))
+        return new_trades
     finally:
         conn.close()
 

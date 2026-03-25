@@ -53,7 +53,7 @@ def save_leaderboard_snapshot(
 def save_trades(
     conn: psycopg2.extensions.connection,
     trades: list[TradeEntry],
-) -> int:
+) -> set[str]:
     """
     Insert trades, silently skipping any that already exist (by transaction_hash).
 
@@ -62,7 +62,7 @@ def save_trades(
         trades: Trade entries to persist.
 
     Returns:
-        Number of NEW rows inserted (duplicates excluded).
+        Set of transaction hashes that were actually inserted (duplicates excluded).
     """
     sql = """
         INSERT INTO trader_trades
@@ -71,28 +71,29 @@ def save_trades(
         VALUES
             (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (transaction_hash) DO NOTHING
+        RETURNING transaction_hash
     """
-    rows = [
-        (
-            t.proxy_wallet,
-            t.side,
-            t.size,
-            t.price,
-            datetime.fromtimestamp(t.timestamp, tz=timezone.utc),
-            t.title,
-            t.outcome,
-            t.transaction_hash,
-            t.slug,
-            t.condition_id,
-        )
-        for t in trades
-    ]
+    inserted_hashes: set[str] = set()
     with conn.cursor() as cur:
-        cur.executemany(sql, rows)
-        inserted = cur.rowcount if cur.rowcount >= 0 else len(rows)
+        for t in trades:
+            cur.execute(sql, (
+                t.proxy_wallet,
+                t.side,
+                t.size,
+                t.price,
+                datetime.fromtimestamp(t.timestamp, tz=timezone.utc),
+                t.title,
+                t.outcome,
+                t.transaction_hash,
+                t.slug,
+                t.condition_id,
+            ))
+            row = cur.fetchone()
+            if row:
+                inserted_hashes.add(row[0])
     conn.commit()
-    logger.debug("Saved trades: %d attempted, %d inserted (rest already existed).", len(rows), inserted)
-    return inserted
+    logger.debug("Saved trades: %d attempted, %d inserted (rest already existed).", len(trades), len(inserted_hashes))
+    return inserted_hashes
 
 
 def upsert_tracked_wallets(

@@ -21,7 +21,7 @@ import argparse
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from utility.logger import init_logging
 from core.models.leaderboard import LeaderboardEntry
@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 # Seconds between each polling cycle
 POLL_INTERVAL_SECONDS = 5
+
+# Track all execution attempts (success OR failure) across cycles so the validator
+# does not keep retrying closed markets for the full 30-minute lookback window.
+# Maps (asset, side) → UTC datetime of last attempt.
+_execution_attempts: dict[tuple[str, str], datetime] = {}
 
 
 def parse_args() -> argparse.Namespace:
@@ -316,6 +321,19 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
     # retry them before our orders have propagated to the Polymarket API.
     executed_this_cycle: set[tuple[str, str]] = set()
 
+    # Build the persistent "already attempted" set from module-level history.
+    # This prevents the validator from retrying closed-market trades across cycles.
+    from service.validator_service import LOOKBACK_MINUTES
+    now_utc = datetime.now(timezone.utc)
+    lookback_cutoff = now_utc - timedelta(minutes=LOOKBACK_MINUTES)
+    # Prune expired entries while building the set
+    persistent_attempted: set[tuple[str, str]] = set()
+    for key, attempted_at in list(_execution_attempts.items()):
+        if attempted_at >= lookback_cutoff:
+            persistent_attempted.add(key)
+        else:
+            del _execution_attempts[key]
+
     for res in ranked_traders:
         trader = res["trader"]
         trades = res["trades_buffer"]
@@ -337,30 +355,34 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
 
         print_trades(trader.user_name, trades, limit_to_print=5)
 
-        # Fetch known hashes from DB to identify truly new trades
-        known_hashes = set(db_service.get_known_trade_hashes(trader.proxy_wallet, limit=500))
-
-        # Genesis detection: check tracked_wallets, not just known_hashes.
+        # Genesis detection: check tracked_wallets before persisting.
         # This survives DB trade-table wipes without re-executing old history.
         is_genesis = not db_service.is_wallet_tracked(trader.proxy_wallet)
-        new_trades = [t for t in trades if t.transaction_hash not in known_hashes]
 
         if is_genesis:
             logger.info(
                 "  [!] Genesis run for %s — seeding %d historical trades silently.",
-                trader.user_name, len(new_trades),
+                trader.user_name, len(trades),
             )
-            new_trades = []  # Do not alert or execute on historical trades
 
-        # Persist all fetched trades (ON CONFLICT DO NOTHING handles duplicates)
-        db_service.persist_trades(trades)
+        # Persist all fetched trades; DB returns only the truly new ones via RETURNING.
+        new_trades = db_service.persist_trades(trades)
 
-        # Register wallet as tracked after first seed so next run is not genesis
+        # Suppress alerts on genesis seed and register wallet as tracked.
         if is_genesis:
+            new_trades = []
             db_service.upsert_wallet(trader.proxy_wallet, trader.user_name)
 
         # Alert then attempt copy-trade for each genuinely new trade
         for trade in new_trades:
+            # Log API detection lag: time between trade on-chain and us seeing it
+            detection_lag = datetime.now(timezone.utc) - trade.datetime_utc
+            logger.info(
+                "  Detection lag: %.0fs (trade at %s, detected now)",
+                detection_lag.total_seconds(),
+                trade.datetime_utc.strftime("%H:%M:%S UTC"),
+            )
+
             # Send Telegram alert first (notification of signal detection)
             if telegram_service.send_trade_alert(trade, trader.user_name):
                 alerts_sent += 1
@@ -372,8 +394,10 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
             logger.info("Initiating copy-trade execution...")
             try:
                 executed = execute_copy_trade(trade)
+                key = (trade.asset, trade.side)
+                _execution_attempts[key] = datetime.now(timezone.utc)
                 if executed:
-                    executed_this_cycle.add((trade.asset, trade.side))
+                    executed_this_cycle.add(key)
                 else:
                     logger.warning("Copy-trade was not submitted for: %s", trade.title[:60])
             except Exception as e:
@@ -390,8 +414,12 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
     # Validation: reconcile target trades vs our executions, retry any gaps
     if args.wallets:
         from service.validator_service import find_missed_trades
+        # Merge cycle-level executions with cross-cycle persistent attempts so the
+        # validator skips trades we already tried (even if they failed due to a
+        # closed market) — prevents the 30-minute retry flood on closed markets.
+        all_attempted = executed_this_cycle | persistent_attempted
         for res in ranked_traders:
-            missed = find_missed_trades(res["trades_buffer"], already_executed=executed_this_cycle)
+            missed = find_missed_trades(res["trades_buffer"], already_executed=all_attempted)
             if not missed:
                 continue
             logger.info(
@@ -405,7 +433,14 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
                 )
                 try:
                     executed = execute_copy_trade(trade)
-                    if not executed:
+                    key = (trade.asset, trade.side)
+                    # Record the attempt regardless of outcome so subsequent cycles
+                    # and the next validator call this cycle don't retry it again.
+                    _execution_attempts[key] = datetime.now(timezone.utc)
+                    all_attempted.add(key)
+                    if executed:
+                        executed_this_cycle.add(key)
+                    else:
                         logger.warning(
                             "  [VALIDATOR] Retry skipped by executor: %s", trade.title[:60]
                         )
