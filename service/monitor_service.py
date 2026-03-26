@@ -148,7 +148,9 @@ def poll_lifecycle() -> None:
             # Flag trades stuck > 24h with no resolution
             elif submitted_at:
                 try:
-                    submitted_dt = datetime.fromisoformat(str(submitted_at)).replace(tzinfo=timezone.utc) if not hasattr(submitted_at, 'tzinfo') else submitted_at
+                    submitted_dt = datetime.fromisoformat(str(submitted_at)) if isinstance(submitted_at, str) else submitted_at
+                    if submitted_dt.tzinfo is None:
+                        submitted_dt = submitted_dt.replace(tzinfo=timezone.utc)
                     if (now_utc - submitted_dt).total_seconds() > _STUCK_HOURS * 3600:
                         db_service.update_yield_trade(trade_id, status="error")
                         logger.warning("Monitor: trade %d stuck >%dh — marking error", trade_id, _STUCK_HOURS)
@@ -162,7 +164,9 @@ def poll_lifecycle() -> None:
         # ── resolved → settled (30min delay) ─────────────────────────────────
         if trade.get("resolved_at") and not trade.get("settled_at"):
             try:
-                resolved_dt = datetime.fromisoformat(str(trade["resolved_at"])).replace(tzinfo=timezone.utc) if not hasattr(trade["resolved_at"], 'tzinfo') else trade["resolved_at"]
+                resolved_dt = datetime.fromisoformat(str(trade["resolved_at"])) if isinstance(trade["resolved_at"], str) else trade["resolved_at"]
+                if resolved_dt.tzinfo is None:
+                    resolved_dt = resolved_dt.replace(tzinfo=timezone.utc)
                 if (now_utc - resolved_dt).total_seconds() > _SETTLE_DELAY_MINUTES * 60:
                     db_service.update_yield_trade(trade_id, settled_at=now_utc)
                     logger.info("Monitor: trade %d marked settled", trade_id)
@@ -172,10 +176,11 @@ def poll_lifecycle() -> None:
 
 def check_balance_warning(current_balance: float) -> None:
     """Fire a Telegram alert if balance is approaching the floor threshold."""
-    from service.risk_guard_service import _BALANCE_FLOOR
-    if current_balance < _BALANCE_FLOOR * _BALANCE_WARNING_MULTIPLIER:
-        logger.warning("Monitor: balance $%.2f is below 2× floor ($%.2f)", current_balance, _BALANCE_FLOOR)
-        telegram_service.send_balance_warning(current_balance=current_balance, floor=_BALANCE_FLOOR)
+    from service.risk_guard_service import get_balance_floor
+    balance_floor = get_balance_floor()
+    if current_balance < balance_floor * _BALANCE_WARNING_MULTIPLIER:
+        logger.warning("Monitor: balance $%.2f is below 2× floor ($%.2f)", current_balance, balance_floor)
+        telegram_service.send_balance_warning(current_balance=current_balance, floor=balance_floor)
 
 
 def send_daily_summary_if_due(current_balance: float) -> None:

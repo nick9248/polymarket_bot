@@ -24,7 +24,7 @@ import requests
 
 from core.models.yield_opportunity import YieldOpportunity
 from service.copy_trade_service import execute_yield_trade
-from service import db_service
+from service import db_service, telegram_service
 from utility.constants import REQUEST_TIMEOUT_SECONDS
 from utility.endpoints import GAMMA_MARKETS, CLOB_MARKETS
 
@@ -272,6 +272,20 @@ def run_yield_farming_cycle(
             _executed_token_ids.add(opp.token_id)
             submitted += 1
             logger.info("Yield trade submitted: %s (%s)", opp.title[:55], opp.outcome)
+            # Send Telegram alert for successful submission
+            if result.fill_price is not None and result.shares is not None and result.cost_usd is not None:
+                try:
+                    balance_after = (result.balance_before or 0.0) - result.cost_usd
+                    telegram_service.send_yield_trade_submitted(
+                        title=opp.title,
+                        outcome=opp.outcome,
+                        fill_price=result.fill_price,
+                        shares=result.shares,
+                        cost_usd=result.cost_usd,
+                        balance_after=balance_after,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to send submission Telegram alert: %s", e)
         else:
             logger.warning("Yield trade failed: %s (%s)", opp.title[:55], opp.outcome)
 

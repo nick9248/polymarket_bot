@@ -41,6 +41,11 @@ class RiskStatus:
     reason: str | None
 
 
+def get_balance_floor() -> float:
+    """Return the configured balance floor threshold."""
+    return _BALANCE_FLOOR
+
+
 def check_risk(current_balance: float, session_start_balance: float) -> RiskStatus:
     """
     Run all three circuit breakers. Returns on the first failure.
@@ -97,7 +102,12 @@ def get_risk_dashboard_state(current_balance: float, session_start_balance: floa
     """
     from service import db_service
     recent = db_service.get_recent_yield_trade_statuses(limit=_MAX_CONSECUTIVE_LOSSES)
-    consecutive_loss_count = sum(1 for s in recent if s == "lost") if all(s == "lost" for s in recent) else 0
+    consecutive_loss_count = 0
+    for s in recent:
+        if s == "lost":
+            consecutive_loss_count += 1
+        else:
+            break
     drawdown_pct = (
         (session_start_balance - current_balance) / session_start_balance * 100
         if session_start_balance > 0 else 0.0

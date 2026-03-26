@@ -64,12 +64,13 @@ def test_get_recent_yield_trade_statuses_returns_list():
 def test_get_open_yield_trades_returns_dicts():
     from core.database import repository
     conn, cur = _make_conn(fetchall=[
-        (1, "tok1", "cond1", "Market A", "Yes", 0.95, 0.96, 2, 1.92, "submitted", None, None, None, 50.0, 50.0)
+        (1, "tok1", "cond1", "Market A", "Yes", 0.95, 0.96, 2, 1.92, "submitted", None, None, None, 50.0, 50.0, None)
     ])
     cur.description = [
         ("id",), ("token_id",), ("condition_id",), ("title",), ("outcome",),
         ("signal_price",), ("fill_price",), ("shares",), ("cost_usd",), ("status",),
         ("resolved_at",), ("settled_at",), ("pnl_usd",), ("session_balance_start",), ("balance_before",),
+        ("submitted_at",),
     ]
     result = repository.get_open_yield_trades(conn)
     assert len(result) == 1

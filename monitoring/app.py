@@ -23,7 +23,7 @@ from flask_cors import CORS
 
 from utility.logger import init_logging
 from service import db_service
-from service.risk_guard_service import get_risk_dashboard_state, _BALANCE_FLOOR
+from service.risk_guard_service import get_risk_dashboard_state, get_balance_floor
 
 init_logging(level="WARNING")
 
@@ -74,13 +74,13 @@ def balance():
     current = heartbeat.get("current_balance") or 0.0
     start = heartbeat.get("session_start_balance") or 0.0
     drawdown_pct = ((start - current) / start * 100) if start > 0 else 0.0
-    floor_warning = current < _BALANCE_FLOOR * 2
+    floor_warning = current < get_balance_floor() * 2
 
     return jsonify({
         "current_balance": current,
         "session_start_balance": start,
         "drawdown_pct": round(drawdown_pct, 2),
-        "floor": _BALANCE_FLOOR,
+        "floor": get_balance_floor(),
         "floor_warning": floor_warning,
     })
 
@@ -119,8 +119,11 @@ def pnl_chart():
 def trades():
     """Paginated yield_trades rows. Query params: status, limit, offset."""
     status_filter = request.args.get("status") or None
-    limit = min(int(request.args.get("limit", 50)), 200)
-    offset = int(request.args.get("offset", 0))
+    try:
+        limit = min(int(request.args.get("limit", 50)), 200)
+        offset = int(request.args.get("offset", 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "limit and offset must be integers"}), 400
     try:
         rows = db_service.get_yield_trades_page(status=status_filter, limit=limit, offset=offset)
         return jsonify(rows)
