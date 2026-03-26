@@ -60,10 +60,44 @@ CREATE TABLE IF NOT EXISTS tracked_wallets (
 );
 """
 
+_CREATE_YIELD_TRADES = """
+CREATE TABLE IF NOT EXISTS yield_trades (
+    id                    SERIAL PRIMARY KEY,
+    token_id              TEXT NOT NULL,
+    condition_id          TEXT NOT NULL,
+    title                 TEXT,
+    outcome               TEXT,
+    signal_price          NUMERIC(6,4),
+    fill_price            NUMERIC(6,4),
+    shares                INTEGER,
+    cost_usd              NUMERIC(10,4),
+    status                TEXT NOT NULL DEFAULT 'submitted',
+    clob_order_id         TEXT,
+    submitted_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at           TIMESTAMPTZ,
+    settled_at            TIMESTAMPTZ,
+    pnl_usd               NUMERIC(10,4),
+    session_balance_start NUMERIC(10,2),
+    balance_before        NUMERIC(10,2)
+);
+"""
+
+_CREATE_BOT_HEARTBEAT = """
+CREATE TABLE IF NOT EXISTS bot_heartbeat (
+    id                    INTEGER PRIMARY KEY DEFAULT 1,
+    mode                  TEXT,
+    last_seen             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    session_start_balance NUMERIC(10,2),
+    current_balance       NUMERIC(10,2)
+);
+"""
+
 _ALL_TABLES = [
     _CREATE_LEADERBOARD_SNAPSHOTS,
     _CREATE_TRADER_TRADES,
     _CREATE_TRACKED_WALLETS,
+    _CREATE_YIELD_TRADES,
+    _CREATE_BOT_HEARTBEAT,
 ]
 
 # ── Public Functions ──────────────────────────────────────────────────────────
@@ -114,6 +148,6 @@ def init_schema() -> None:
             for statement in _ALL_TABLES:
                 cur.execute(statement)
         conn.commit()
-        logger.info("Database schema initialised (tables: leaderboard_snapshots, trader_trades, tracked_wallets).")
+        logger.info("Database schema initialised (tables: leaderboard_snapshots, trader_trades, tracked_wallets, yield_trades, bot_heartbeat).")
     finally:
         conn.close()
