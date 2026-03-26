@@ -228,3 +228,102 @@ def send_leaderboard_summary(entries, period: str, category: str) -> bool:
             f"  #{e.rank}  <b>{e.user_name}</b>  PnL: <code>${e.pnl:,.0f}</code>"
         )
     return send_message("\n".join(lines))
+
+
+def send_yield_trade_submitted(title: str, outcome: str, fill_price: float, shares: int, cost_usd: float, balance_after: float) -> bool:
+    """Alert when a yield trade order is accepted by the CLOB."""
+    text = (
+        f"🟢 <b>YIELD TRADE SUBMITTED</b>\n"
+        f"\n"
+        f"📋 <b>Market:</b> {title}\n"
+        f"🎯 <b>Outcome:</b> {outcome}\n"
+        f"💵 <b>Fill price:</b> ${fill_price:.4f} ({fill_price * 100:.1f}% prob)\n"
+        f"📦 <b>Shares:</b> {shares}\n"
+        f"💰 <b>Cost:</b> ${cost_usd:.2f}\n"
+        f"🏦 <b>Balance after:</b> ${balance_after:.2f}"
+    )
+    return send_message(text)
+
+
+def send_yield_trade_won(title: str, outcome: str, pnl_usd: float, session_net_pnl: float, win_rate: float) -> bool:
+    """Alert when a yield trade resolves as a win."""
+    text = (
+        f"✅ <b>YIELD TRADE WON</b>\n"
+        f"\n"
+        f"📋 <b>Market:</b> {title}\n"
+        f"🎯 <b>Outcome:</b> {outcome}\n"
+        f"💸 <b>P&L:</b> +${pnl_usd:.4f}\n"
+        f"📊 <b>Session net P&L:</b> ${session_net_pnl:+.2f}\n"
+        f"🏆 <b>Win rate:</b> {win_rate * 100:.1f}%"
+    )
+    return send_message(text)
+
+
+def send_yield_trade_lost(title: str, outcome: str, loss_usd: float, session_net_pnl: float, win_rate: float) -> bool:
+    """Alert when a yield trade resolves as a loss."""
+    text = (
+        f"❌ <b>YIELD TRADE LOST</b>\n"
+        f"\n"
+        f"📋 <b>Market:</b> {title}\n"
+        f"🎯 <b>Outcome:</b> {outcome}\n"
+        f"💸 <b>Loss:</b> -${abs(loss_usd):.4f}\n"
+        f"📊 <b>Session net P&L:</b> ${session_net_pnl:+.2f}\n"
+        f"📉 <b>Win rate:</b> {win_rate * 100:.1f}%"
+    )
+    return send_message(text)
+
+
+def send_risk_guard_blocked(reason: str) -> bool:
+    """Alert when a circuit breaker halts trading."""
+    text = (
+        f"🛑 <b>TRADING HALTED — RISK GUARD</b>\n"
+        f"\n"
+        f"⚠️ <b>Reason:</b> {reason}\n"
+        f"\n"
+        f"Bot will keep scanning but will not execute trades until conditions improve."
+    )
+    return send_message(text)
+
+
+def send_balance_warning(current_balance: float, floor: float) -> bool:
+    """Alert when balance drops below 2× the floor threshold."""
+    text = (
+        f"⚠️ <b>LOW BALANCE WARNING</b>\n"
+        f"\n"
+        f"🏦 <b>Current balance:</b> ${current_balance:.2f}\n"
+        f"🛑 <b>Floor (halt threshold):</b> ${floor:.2f}\n"
+        f"📉 Balance is below 2× floor — approaching trading halt."
+    )
+    return send_message(text)
+
+
+def send_yield_daily_summary(
+    total_trades: int,
+    won: int,
+    lost: int,
+    win_rate: float,
+    net_pnl: float,
+    current_balance: float,
+) -> bool:
+    """Send the daily summary at 23:00 UTC."""
+    icon = "📈" if net_pnl >= 0 else "📉"
+    text = (
+        f"{icon} <b>Yield Farming — Daily Summary</b>\n"
+        f"\n"
+        f"📊 <b>Trades today:</b> {total_trades} | Won: {won} | Lost: {lost}\n"
+        f"🏆 <b>Win rate:</b> {win_rate * 100:.1f}%\n"
+        f"💸 <b>Net P&L:</b> ${net_pnl:+.2f}\n"
+        f"🏦 <b>Current balance:</b> ${current_balance:.2f}"
+    )
+    return send_message(text)
+
+
+def send_yield_error(context: str, error: str) -> bool:
+    """Alert on unexpected errors in the yield farming cycle."""
+    text = (
+        f"🔴 <b>YIELD FARMING ERROR</b>\n"
+        f"\n"
+        f"📍 <b>Context:</b> {context}\n"
+        f"⚠️ <b>Error:</b> {error[:300]}"
+    )
+    return send_message(text)
