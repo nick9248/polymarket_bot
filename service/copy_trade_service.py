@@ -19,7 +19,11 @@ from py_clob_client.exceptions import PolyApiException
 from py_clob_client.order_builder.constants import BUY, SELL
 
 from core.models.trades import TradeEntry
+from core.models.yield_trade_result import YieldTradeResult
 from utility.geo import is_in_spain
+
+# Fraction of USDC balance used per yield trade (1%)
+_DEFAULT_BUDGET_FRACTION = 0.01
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -262,3 +266,141 @@ def execute_copy_trade(trade: TradeEntry) -> bool:
     except Exception as e:
         logger.error("Unexpected error during copy trade: %s", e)
         return False
+
+
+def execute_yield_trade(
+    token_id: str,
+    condition_id: str,
+    title: str,
+    signal_price: float,
+    budget_fraction: float = _DEFAULT_BUDGET_FRACTION,
+) -> YieldTradeResult:
+    """
+    Execute a yield farming BUY order on the Polymarket CLOB.
+
+    Order size is determined by: max($1.00 minimum, balance × budget_fraction).
+    The CLOB minimum share count and $1 notional floor are both respected.
+
+    Args:
+        token_id: CLOB token ID for the outcome to buy.
+        condition_id: Market condition ID (used for min order size lookup).
+        title: Human-readable market title (for logging only).
+        signal_price: Expected price from Gamma API (used for slippage check).
+        budget_fraction: Fraction of USDC balance to spend (default 1%).
+
+    Returns:
+        YieldTradeResult with order_id, shares, and cost_usd if successful, None values otherwise.
+    """
+    logger.info("=== PREPARING YIELD TRADE ===")
+    logger.info("Market: %s @ $%.4f (signal)", title[:60], signal_price)
+
+    if not is_in_spain():
+        logger.error("Execution blocked: Geo location is not Spain (ES).")
+        return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+
+    if not token_id:
+        logger.error("Execution blocked: No token_id provided.")
+        return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+
+    if signal_price <= 0.0 or signal_price > 1.0:
+        logger.error("Execution blocked: Invalid signal price %.6f", signal_price)
+        return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+
+    try:
+        pk = os.getenv("poly_private_key", "").strip(" '\"")
+        client = _get_client()
+
+        # ── Current market price ───────────────────────────────────────────────
+        current_price = _get_current_market_price(client, token_id, "BUY")
+        if current_price is None:
+            logger.error("Execution blocked: Order book empty or market closed: %s", title[:60])
+            return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+
+        # ── Slippage guard ─────────────────────────────────────────────────────
+        slippage_pct = abs(current_price - signal_price) / signal_price * 100
+        if slippage_pct > _MAX_SLIPPAGE_PCT:
+            logger.warning(
+                "Skipping: slippage %.1f%% exceeds %.0f%% threshold "
+                "(signal $%.3f → current $%.3f): %s",
+                slippage_pct, _MAX_SLIPPAGE_PCT,
+                signal_price, current_price, title[:60],
+            )
+            return YieldTradeResult(success=False, order_id=None, fill_price=current_price, shares=None, cost_usd=None, balance_before=None)
+
+        logger.info(
+            "Current market price: $%.4f  (signal: $%.4f, slippage: %.1f%%)",
+            current_price, signal_price, slippage_pct,
+        )
+
+        # ── CLOB valid price range ─────────────────────────────────────────────
+        if current_price >= 0.99 or current_price <= 0.01:
+            logger.warning(
+                "Skipping: current price %.4f is outside CLOB range (0.01–0.99): %s",
+                current_price, title[:60],
+            )
+            return YieldTradeResult(success=False, order_id=None, fill_price=current_price, shares=None, cost_usd=None, balance_before=None)
+
+        # ── Dynamic sizing ─────────────────────────────────────────────────────
+        # Target budget: max($1 minimum, balance × budget_fraction)
+        balance = _get_usdc_balance(pk)
+        budget_usd = max(_CLOB_MIN_NOTIONAL_USD, balance * budget_fraction)
+
+        # Shares: satisfy per-market minimum, $1 notional floor, and target budget
+        min_market_shares = _get_min_order_size(client, condition_id)
+        min_shares_for_notional = math.ceil(_CLOB_MIN_NOTIONAL_USD / current_price)
+        target_shares = math.floor(budget_usd / current_price)
+        order_size = max(min_market_shares, min_shares_for_notional, target_shares)
+        order_cost = order_size * current_price
+
+        # ── Balance check ──────────────────────────────────────────────────────
+        if balance < order_cost:
+            logger.error(
+                "Execution blocked: Insufficient USDC. Need $%.2f (%d shares × $%.3f), have $%.2f",
+                order_cost, order_size, current_price, balance,
+            )
+            return YieldTradeResult(success=False, order_id=None, fill_price=current_price, shares=order_size, cost_usd=order_cost, balance_before=balance)
+
+        logger.info(
+            "Balance: $%.2f | budget: $%.2f | %d shares @ $%.4f = $%.2f",
+            balance, budget_usd, order_size, current_price, order_cost,
+        )
+
+        # ── Submit taker order ─────────────────────────────────────────────────
+        args = OrderArgs(
+            token_id=token_id,
+            price=round(current_price, 2),
+            size=float(order_size),
+            side=BUY,
+        )
+
+        logger.info(
+            "Submitting yield BUY: %d shares @ $%.4f (~$%.2f)",
+            order_size, args.price, args.price * args.size,
+        )
+
+        signed_order = client.create_order(args)
+        resp = client.post_order(signed_order)
+
+        if resp.get("success"):
+            order_id = resp.get("orderID")
+            logger.info("YIELD TRADE SUBMITTED! OrderID=%s status=%s", order_id, resp.get("status"))
+            return YieldTradeResult(success=True, order_id=order_id, fill_price=current_price, shares=order_size, cost_usd=order_cost, balance_before=balance)
+        else:
+            logger.error("YIELD TRADE REJECTED: %s", resp)
+            return YieldTradeResult(success=False, order_id=None, fill_price=current_price, shares=order_size, cost_usd=order_cost, balance_before=balance)
+
+    except PolyApiException as e:
+        if e.status_code == 404:
+            logger.warning("CLOB market not found (404) — market already closed: %s", title[:60])
+        else:
+            logger.error("CLOB API error (status=%s): %s", e.status_code, e)
+        return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+    except (ValueError, KeyError) as e:
+        logger.error("Invalid yield trade parameters: %s", e)
+        return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+    except requests.RequestException as e:
+        logger.error("Network error during yield trade: %s", e)
+        return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+    except Exception as e:
+        logger.error("Unexpected error during yield trade: %s", e)
+        return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
