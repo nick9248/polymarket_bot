@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Yield Farming Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+    h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 20px; color: #f8fafc; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+    .card { background: #1e2130; border-radius: 10px; padding: 18px; border: 1px solid #2d3348; }
+    .card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 12px; }
+    .metric { font-size: 1.6rem; font-weight: 700; color: #f1f5f9; }
+    .sub { font-size: 0.8rem; color: #64748b; margin-top: 4px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge.ok { background: #14532d; color: #4ade80; }
+    .badge.warn { background: #451a03; color: #fb923c; }
+    .badge.err { background: #450a0a; color: #f87171; }
+    .breaker { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #2d3348; font-size: 0.85rem; }
+    .breaker:last-child { border-bottom: none; }
+    .chart-card { background: #1e2130; border-radius: 10px; padding: 18px; border: 1px solid #2d3348; margin-bottom: 16px; }
+    .chart-card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th { text-align: left; padding: 8px 10px; color: #64748b; font-weight: 500; border-bottom: 1px solid #2d3348; }
+    td { padding: 8px 10px; border-bottom: 1px solid #1a1f2e; }
+    tr:hover td { background: #252a3a; }
+    .status-won { color: #4ade80; font-weight: 600; }
+    .status-lost { color: #f87171; font-weight: 600; }
+    .status-submitted, .status-filled { color: #60a5fa; }
+    .status-error { color: #fb923c; }
+    .pnl-pos { color: #4ade80; }
+    .pnl-neg { color: #f87171; }
+    .filter-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .filter-btn { background: #2d3348; border: none; color: #94a3b8; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+    .filter-btn.active { background: #3b4fd9; color: #fff; }
+    .alive-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .alive-dot.on { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+    .alive-dot.off { background: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>Yield Farming Monitor</h1>
+
+  <!-- Status / Balance / Risk -->
+  <div class="grid3">
+    <div class="card" id="card-status">
+      <h2>Bot Status</h2>
+      <div class="metric" id="bot-mode">—</div>
+      <div class="sub" id="bot-lastseen">Loading...</div>
+    </div>
+    <div class="card">
+      <h2>USDC Balance</h2>
+      <div class="metric" id="balance-current">—</div>
+      <div class="sub" id="balance-info">Loading...</div>
+    </div>
+    <div class="card">
+      <h2>Risk Guards</h2>
+      <div id="risk-breakers">Loading...</div>
+    </div>
+  </div>
+
+  <!-- P&L Summary + Chart -->
+  <div class="chart-card">
+    <h2>Session P&L — <span id="pnl-summary-line">Loading...</span></h2>
+    <canvas id="pnl-chart" height="80"></canvas>
+  </div>
+
+  <!-- Trades table -->
+  <div class="card">
+    <h2>Recent Trades</h2>
+    <div class="filter-bar">
+      <button class="filter-btn active" onclick="setFilter(null, this)">All</button>
+      <button class="filter-btn" onclick="setFilter('submitted', this)">Submitted</button>
+      <button class="filter-btn" onclick="setFilter('filled', this)">Filled</button>
+      <button class="filter-btn" onclick="setFilter('won', this)">Won</button>
+      <button class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
+      <button class="filter-btn" onclick="setFilter('error', this)">Error</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Time (UTC)</th><th>Market</th><th>Outcome</th><th>Price</th><th>Shares</th><th>Cost</th><th>Status</th><th>P&L</th></tr>
+      </thead>
+      <tbody id="trades-tbody"></tbody>
+    </table>
+  </div>
+
+<script>
+  let pnlChart = null;
+  let currentFilter = null;
+
+  function setFilter(status, btn) {
+    currentFilter = status;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadTrades();
+  }
+
+  async function loadStatus() {
+    const [s, b] = await Promise.all([
+      fetch('/api/status').then(r => r.json()),
+      fetch('/api/balance').then(r => r.json()),
+    ]);
+
+    const alive = s.alive;
+    const dot = `<span class="alive-dot ${alive ? 'on' : 'off'}"></span>`;
+    document.getElementById('bot-mode').innerHTML = dot + (s.mode || 'Unknown');
+    document.getElementById('bot-lastseen').textContent = s.last_seen
+      ? 'Last seen: ' + new Date(s.last_seen).toLocaleTimeString()
+      : 'Never seen';
+
+    document.getElementById('balance-current').textContent =
+      b.current_balance != null ? `$${b.current_balance.toFixed(2)}` : '—';
+    const dd = b.drawdown_pct != null ? `${b.drawdown_pct.toFixed(1)}%` : '—';
+    const floorWarn = b.floor_warning ? ' ⚠️ near floor' : '';
+    document.getElementById('balance-info').textContent =
+      `Start: $${(b.session_start_balance || 0).toFixed(2)} | Drawdown: ${dd}${floorWarn}`;
+  }
+
+  async function loadRisk() {
+    const r = await fetch('/api/risk').then(res => res.json());
+    const html = Object.entries(r).map(([key, v]) => {
+      const cls = v.triggered ? 'err' : 'ok';
+      const icon = v.triggered ? '🛑' : '✅';
+      const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return `<div class="breaker"><span>${icon} ${label}</span><span class="badge ${cls}">${v.label}</span></div>`;
+    }).join('');
+    document.getElementById('risk-breakers').innerHTML = html;
+  }
+
+  async function loadPnl() {
+    const [summary, chart] = await Promise.all([
+      fetch('/api/pnl/summary').then(r => r.json()),
+      fetch('/api/pnl/chart').then(r => r.json()),
+    ]);
+
+    const wr = ((summary.win_rate || 0) * 100).toFixed(1);
+    const netSign = summary.net_pnl >= 0 ? '+' : '';
+    document.getElementById('pnl-summary-line').textContent =
+      `Net: ${netSign}$${(summary.net_pnl || 0).toFixed(2)} | Won: ${summary.won} Lost: ${summary.lost} | Rate: ${wr}%`;
+
+    const labels = chart.map(d => d.date);
+    const data = chart.map(d => d.cumulative_pnl);
+
+    if (pnlChart) {
+      pnlChart.data.labels = labels;
+      pnlChart.data.datasets[0].data = data;
+      pnlChart.update();
+    } else {
+      const ctx = document.getElementById('pnl-chart').getContext('2d');
+      pnlChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Cumulative P&L ($)',
+            data,
+            borderColor: data.length && data[data.length-1] >= 0 ? '#4ade80' : '#f87171',
+            backgroundColor: 'rgba(74,222,128,0.08)',
+            tension: 0.3,
+            fill: true,
+            pointRadius: 3,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#64748b' }, grid: { color: '#1e2130' } },
+            y: { ticks: { color: '#64748b' }, grid: { color: '#2d3348' } },
+          }
+        }
+      });
+    }
+  }
+
+  async function loadTrades() {
+    const url = '/api/trades?limit=50' + (currentFilter ? '&status=' + currentFilter : '');
+    const trades = await fetch(url).then(r => r.json());
+    const tbody = document.getElementById('trades-tbody');
+    if (!trades.length) { tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b;text-align:center;padding:20px">No trades</td></tr>'; return; }
+    tbody.innerHTML = trades.map(t => {
+      const time = t.submitted_at ? new Date(t.submitted_at).toLocaleTimeString() : '—';
+      const title = (t.title || '').slice(0, 40);
+      const price = t.fill_price != null ? `$${parseFloat(t.fill_price).toFixed(3)}` : (t.signal_price ? `~$${parseFloat(t.signal_price).toFixed(3)}` : '—');
+      const shares = t.shares != null ? t.shares : '—';
+      const cost = t.cost_usd != null ? `$${parseFloat(t.cost_usd).toFixed(2)}` : '—';
+      const statusCls = `status-${t.status}`;
+      const pnl = t.pnl_usd != null
+        ? `<span class="${parseFloat(t.pnl_usd) >= 0 ? 'pnl-pos' : 'pnl-neg'}">${parseFloat(t.pnl_usd) >= 0 ? '+' : ''}$${parseFloat(t.pnl_usd).toFixed(4)}</span>`
+        : '—';
+      return `<tr><td>${time}</td><td title="${t.title}">${title}</td><td>${t.outcome || '—'}</td><td>${price}</td><td>${shares}</td><td>${cost}</td><td class="${statusCls}">${t.status}</td><td>${pnl}</td></tr>`;
+    }).join('');
+  }
+
+  async function refresh() {
+    await Promise.all([loadStatus(), loadRisk(), loadPnl(), loadTrades()]);
+  }
+
+  refresh();
+  setInterval(refresh, 10000);
+</script>
+</body>
+</html>
