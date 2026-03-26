@@ -19,6 +19,7 @@ Examples:
 
 import argparse
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -27,7 +28,10 @@ from utility.logger import init_logging
 from core.models.leaderboard import LeaderboardEntry
 from utility.constants import Category, TimePeriod, OrderBy
 from service import leaderboard_service, analysis_service, trades_service, db_service, telegram_service
-from service.copy_trade_service import execute_copy_trade
+from service.copy_trade_service import execute_copy_trade, _get_usdc_balance
+from service.yield_farming_service import run_yield_farming_cycle
+from service.risk_guard_service import check_risk
+from service.monitor_service import poll_lifecycle, check_balance_warning, send_daily_summary_if_due
 from analysis.analyzer import Analyzer
 from analysis.strategy import StrategyAnalyzer
 
@@ -65,6 +69,30 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="",
         help="Comma-separated wallets to exclusively track (copy-trading mode). Format: 0xADDR:name",
+    )
+    parser.add_argument(
+        "--yield-farming",
+        action="store_true",
+        default=False,
+        help="Run in yield farming mode: scan near-expiry markets and buy high-confidence outcomes",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.95,
+        help="Minimum outcome price to act on in yield farming mode (default: 0.95)",
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=5,
+        help="Look-ahead window in minutes for closing markets in yield farming mode (default: 5)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Scan and log opportunities but submit no real orders (use with --yield-farming)",
     )
     return parser.parse_args()
 
@@ -452,7 +480,13 @@ def run_cycle(args: argparse.Namespace) -> tuple[int, str | None]:
 
 def main() -> None:
     args = parse_args()
-    logger.info("polymarket_robot starting (daemon mode, polling every %ds)...", POLL_INTERVAL_SECONDS)
+    if args.yield_farming:
+        logger.info(
+            "polymarket_robot starting in YIELD FARMING mode (threshold=%.2f, window=%dmin, polling every %ds)...",
+            args.threshold, args.window, POLL_INTERVAL_SECONDS,
+        )
+    else:
+        logger.info("polymarket_robot starting (daemon mode, polling every %ds)...", POLL_INTERVAL_SECONDS)
 
     # Initialise DB once at startup — safe to call repeatedly
     try:
@@ -460,6 +494,14 @@ def main() -> None:
     except Exception as e:
         logger.critical("Database initialisation failed: %s", e)
         sys.exit(1)
+
+    # Fetch USDC balance once at session start — used for drawdown calculation
+    session_start_balance = 0.0
+    if args.yield_farming:
+        pk = os.getenv("poly_private_key", "").strip(" '\"")
+        if pk:
+            session_start_balance = _get_usdc_balance(pk)
+            logger.info("Session start USDC balance: $%.2f", session_start_balance)
 
     # Runtime stats — updated each cycle and reported via /health
     started_at = datetime.now(timezone.utc)
@@ -486,13 +528,74 @@ def main() -> None:
 
         # ── Run polling cycle ─────────────────────────────────────────────────
         try:
-            cycle_alerts, last_trade_at = run_cycle(args)
-            stats["cycles_completed"] += 1
-            stats["alerts_total"] += cycle_alerts
-            stats["last_cycle_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-            if last_trade_at:
-                stats["last_new_trade_at"] = last_trade_at
-            stats["db_ok"] = True
+            if args.yield_farming:
+                # 1. Update bot heartbeat (liveness signal for dashboard)
+                try:
+                    pk = os.getenv("poly_private_key", "").strip(" '\"")
+                    current_balance = _get_usdc_balance(pk) if pk and not args.dry_run else session_start_balance
+                    db_service.update_bot_heartbeat(
+                        mode="yield-farming" + (" [dry-run]" if args.dry_run else ""),
+                        session_start_balance=session_start_balance,
+                        current_balance=current_balance,
+                    )
+                except Exception as e:
+                    logger.warning("Could not update bot heartbeat: %s", e)
+                    current_balance = session_start_balance
+
+                # 2. Advance lifecycle of previous trades
+                if not args.dry_run:
+                    try:
+                        poll_lifecycle()
+                    except Exception as e:
+                        logger.error("Monitor lifecycle poll failed: %s", e)
+
+                # 3. Risk guard — check all three circuit breakers
+                if not args.dry_run:
+                    risk = check_risk(current_balance=current_balance, session_start_balance=session_start_balance)
+                    if not risk.allowed:
+                        from service.telegram_service import send_risk_guard_blocked
+                        send_risk_guard_blocked(risk.reason)
+                        logger.warning("Risk guard halted trading this cycle.")
+                        stats["cycles_completed"] += 1
+                        stats["last_cycle_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                        stats["db_ok"] = True
+                        logger.info("Sleeping %ds until next cycle...", POLL_INTERVAL_SECONDS)
+                        time.sleep(POLL_INTERVAL_SECONDS)
+                        continue
+
+                # 4. Balance warning check
+                if not args.dry_run:
+                    try:
+                        check_balance_warning(current_balance)
+                    except Exception as e:
+                        logger.warning("Balance warning check failed: %s", e)
+
+                # 5. Execute yield farming cycle
+                submitted = run_yield_farming_cycle(
+                    threshold=args.threshold,
+                    window_minutes=args.window,
+                    dry_run=args.dry_run,
+                    session_balance_start=session_start_balance,
+                )
+                stats["cycles_completed"] += 1
+                stats["last_cycle_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                stats["alerts_total"] += submitted
+                stats["db_ok"] = True
+
+                # 6. Daily summary
+                if not args.dry_run:
+                    try:
+                        send_daily_summary_if_due(current_balance)
+                    except Exception as e:
+                        logger.warning("Daily summary failed: %s", e)
+            else:
+                cycle_alerts, last_trade_at = run_cycle(args)
+                stats["cycles_completed"] += 1
+                stats["alerts_total"] += cycle_alerts
+                stats["last_cycle_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                if last_trade_at:
+                    stats["last_new_trade_at"] = last_trade_at
+                stats["db_ok"] = True
         except Exception as e:
             logger.error("Unhandled error in polling cycle: %s", e)
             stats["db_ok"] = False
