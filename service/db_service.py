@@ -127,3 +127,112 @@ def upsert_wallet(wallet: str, user_name: str) -> None:
         logger.info("Wallet registered as tracked: %s (%s)", user_name, wallet[:12] + "...")
     finally:
         conn.close()
+
+
+def insert_yield_trade(
+    *,
+    token_id: str,
+    condition_id: str,
+    title: str,
+    outcome: str,
+    signal_price: float,
+    fill_price: float | None,
+    shares: int | None,
+    cost_usd: float | None,
+    clob_order_id: str | None,
+    status: str,
+    session_balance_start: float,
+    balance_before: float,
+) -> int:
+    """Insert a new yield trade record. Returns the new row id."""
+    conn = connection.get_connection()
+    try:
+        return repository.insert_yield_trade(
+            conn,
+            token_id=token_id,
+            condition_id=condition_id,
+            title=title,
+            outcome=outcome,
+            signal_price=signal_price,
+            fill_price=fill_price,
+            shares=shares,
+            cost_usd=cost_usd,
+            clob_order_id=clob_order_id,
+            status=status,
+            session_balance_start=session_balance_start,
+            balance_before=balance_before,
+        )
+    finally:
+        conn.close()
+
+
+def update_yield_trade(trade_id: int, **fields) -> None:
+    """Update status, fill_price, resolved_at, settled_at, or pnl_usd on a yield trade row."""
+    conn = connection.get_connection()
+    try:
+        repository.update_yield_trade(conn, trade_id, **fields)
+    finally:
+        conn.close()
+
+
+def get_open_yield_trades() -> list[dict]:
+    """Return all yield_trades rows with status 'submitted' or 'filled'."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_open_yield_trades(conn)
+    finally:
+        conn.close()
+
+
+def get_recent_yield_trade_statuses(limit: int = 3) -> list[str]:
+    """Return the most recent N resolved yield trade statuses ('won' or 'lost')."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_recent_yield_trade_statuses(conn, limit)
+    finally:
+        conn.close()
+
+
+def get_yield_pnl_summary() -> dict:
+    """Return aggregate P&L stats: total_trades, won, lost, pending, win_rate, net_pnl."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_yield_pnl_summary(conn)
+    finally:
+        conn.close()
+
+
+def get_yield_pnl_chart() -> list[dict]:
+    """Return daily cumulative P&L data points for charting."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_yield_pnl_chart(conn)
+    finally:
+        conn.close()
+
+
+def get_yield_trades_page(status: str | None = None, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Return paginated yield_trades rows, newest first."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_yield_trades_page(conn, status=status, limit=limit, offset=offset)
+    finally:
+        conn.close()
+
+
+def update_bot_heartbeat(mode: str, session_start_balance: float, current_balance: float) -> None:
+    """Update the bot liveness heartbeat row every cycle."""
+    conn = connection.get_connection()
+    try:
+        repository.upsert_bot_heartbeat(conn, mode=mode, session_start_balance=session_start_balance, current_balance=current_balance)
+    finally:
+        conn.close()
+
+
+def get_bot_heartbeat() -> dict | None:
+    """Return heartbeat dict or None if bot has never run."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_bot_heartbeat(conn)
+    finally:
+        conn.close()
