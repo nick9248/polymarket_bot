@@ -272,12 +272,12 @@ def get_open_yield_trades(conn: psycopg2.extensions.connection) -> list[dict]:
 
     Returns:
         List of dicts with keys: id, token_id, condition_id, title, outcome,
-        signal_price, fill_price, shares, cost_usd, status, resolved_at,
-        settled_at, pnl_usd, session_balance_start, balance_before.
+        signal_price, fill_price, shares, cost_usd, status, submitted_at,
+        resolved_at, settled_at, pnl_usd, session_balance_start, balance_before.
     """
     sql = """
         SELECT id, token_id, condition_id, title, outcome, signal_price, fill_price,
-               shares, cost_usd, status, resolved_at, settled_at, pnl_usd,
+               shares, cost_usd, status, submitted_at, resolved_at, settled_at, pnl_usd,
                session_balance_start, balance_before
         FROM yield_trades
         WHERE status IN ('submitted', 'filled')
