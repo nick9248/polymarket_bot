@@ -308,7 +308,7 @@ def get_recent_yield_trade_statuses(
     sql = """
         SELECT status FROM yield_trades
         WHERE status IN ('won', 'lost')
-        ORDER BY submitted_at DESC
+        ORDER BY resolved_at DESC
         LIMIT %s
     """
     with conn.cursor() as cur:
@@ -362,10 +362,16 @@ def get_yield_pnl_chart(conn: psycopg2.extensions.connection) -> list[dict]:
     """
     sql = """
         SELECT
-            DATE(submitted_at AT TIME ZONE 'UTC') AS day,
-            SUM(pnl_usd) OVER (ORDER BY DATE(submitted_at AT TIME ZONE 'UTC')) AS cumulative_pnl
-        FROM yield_trades
-        WHERE pnl_usd IS NOT NULL
+            day,
+            SUM(daily_pnl) OVER (ORDER BY day) AS cumulative_pnl
+        FROM (
+            SELECT
+                DATE(submitted_at AT TIME ZONE 'UTC') AS day,
+                SUM(pnl_usd) AS daily_pnl
+            FROM yield_trades
+            WHERE pnl_usd IS NOT NULL
+            GROUP BY 1
+        ) sub
         ORDER BY day
     """
     with conn.cursor() as cur:
