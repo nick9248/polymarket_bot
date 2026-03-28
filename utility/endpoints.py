@@ -25,5 +25,12 @@ CLOSED_POSITIONS = f"{DATA_API_BASE_URL}/closed-positions"
 # Trader trades only (cleaner than activity — BUY/SELL only)
 TRADES = f"{DATA_API_BASE_URL}/trades"
 
+# ── Polymarket Gamma API (free, no authentication — market metadata) ─────────
+GAMMA_API_BASE_URL = "https://gamma-api.polymarket.com"
+GAMMA_MARKETS = f"{GAMMA_API_BASE_URL}/markets"
+
 # ── Polymarket CLOB API (authentication required — for trading) ───────────────
 CLOB_API_BASE_URL = "https://clob.polymarket.com"
+
+# Public CLOB market metadata — no auth required; returns correct token IDs and live prices
+CLOB_MARKETS = f"{CLOB_API_BASE_URL}/markets"

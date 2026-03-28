@@ -42,6 +42,19 @@ _MAX_TRADES_PER_CYCLE = 20
 # Markets executed this session — keyed by token_id to prevent re-entry
 _executed_token_ids: set[str] = set()
 
+def _is_updown_market(title: str) -> bool:
+    """
+    Returns True if the market is an Up/Down price-direction market.
+
+    These are the only market type with a locked-in outcome near close —
+    the price direction is established and reversals in the final minutes
+    are rare. Covers crypto, stocks, forex, and any future asset class
+    Polymarket adds in the same format, without needing a ticker list.
+
+    Sports, politics, and other event markets never use this title format.
+    """
+    return "up or down" in title.lower()
+
 
 def _resolve_clob_token(condition_id: str, outcome_name: str) -> tuple[str, float] | tuple[None, None]:
     """
@@ -127,6 +140,9 @@ def scan_opportunities(
         if not condition_id or not end_date_str:
             continue
 
+        if not _is_updown_market(title):
+            continue
+
         try:
             close_time = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
             outcome_prices = (
@@ -140,6 +156,10 @@ def scan_opportunities(
                 else outcomes_raw
             )
         except Exception:
+            continue
+
+        # Gamma API ignores end_date_min — filter out already-closed markets locally
+        if close_time <= now_utc:
             continue
 
         if not outcome_prices:
@@ -176,6 +196,17 @@ def scan_opportunities(
         if token_id in _executed_token_ids:
             continue
 
+        # Re-check CLOB price against threshold — Gamma price can diverge from live CLOB
+        # price (stale Gamma data, fallback token selection, or rapid price movement).
+        # Without this, a 95¢ Gamma signal could result in a 49¢ CLOB buy.
+        if clob_price < threshold:
+            logger.debug(
+                "Skipping: CLOB price $%.4f below threshold %.2f for %s (%s) — Gamma was $%.4f",
+                clob_price, threshold, candidate["title"][:50],
+                candidate["outcome_name"], candidate["gamma_price"],
+            )
+            continue
+
         # Use CLOB live price as the authoritative price (Gamma price is used only for pre-filter)
         opportunities.append(YieldOpportunity(
             condition_id=candidate["condition_id"],
@@ -190,7 +221,7 @@ def scan_opportunities(
     opportunities.sort(key=lambda o: o.price, reverse=True)
 
     logger.info(
-        "Yield scan: %d market(s) polled → %d candidate(s) above %.2f → %d with valid CLOB token",
+        "Yield scan: %d market(s) polled → %d up/down candidate(s) above %.2f → %d with valid CLOB token",
         len(markets), len(candidates), threshold, len(opportunities),
     )
 
@@ -268,8 +299,13 @@ def run_yield_farming_cycle(
         except Exception as e:
             logger.error("Failed to write yield trade to DB: %s", e)
 
+        # Always mark the token as seen — success or failure — so the same
+        # market is never retried within this session. Without this, a failed
+        # trade (e.g. price outside CLOB range) would be re-attempted every
+        # 5-second cycle until the market closes, flooding the DB and CLOB API.
+        _executed_token_ids.add(opp.token_id)
+
         if result.success:
-            _executed_token_ids.add(opp.token_id)
             submitted += 1
             logger.info("Yield trade submitted: %s (%s)", opp.title[:55], opp.outcome)
             # Send Telegram alert for successful submission

@@ -32,6 +32,7 @@ _CLOB_HOST = "https://clob.polymarket.com"
 _POLYGON_CHAIN_ID = 137
 _DEFAULT_MIN_ORDER_SIZE = 5  # fallback if market lookup fails
 _CLOB_MIN_NOTIONAL_USD = 1.0  # CLOB rejects orders below $1 notional regardless of share count
+_MAX_ORDER_USD = 6.0          # Hard cap per yield trade — skip markets whose minimum forces a larger spend
 
 # Maximum allowed price movement between signal price and current market price.
 # With 5-second polling, slippage is usually < 2%. 10% flags something unusual
@@ -351,6 +352,16 @@ def execute_yield_trade(
         target_shares = math.floor(budget_usd / current_price)
         order_size = max(min_market_shares, min_shares_for_notional, target_shares)
         order_cost = order_size * current_price
+
+        # ── Order cap ──────────────────────────────────────────────────────────
+        # If the market's minimum_order_size forces the cost above the hard cap,
+        # skip rather than silently deploying more capital than intended.
+        if order_cost > _MAX_ORDER_USD:
+            logger.warning(
+                "Skipping: minimum order cost $%.2f exceeds cap $%.2f (%d shares × $%.3f): %s",
+                order_cost, _MAX_ORDER_USD, order_size, current_price, title[:60],
+            )
+            return YieldTradeResult(success=False, order_id=None, fill_price=current_price, shares=order_size, cost_usd=order_cost, balance_before=balance)
 
         # ── Balance check ──────────────────────────────────────────────────────
         if balance < order_cost:

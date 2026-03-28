@@ -46,6 +46,10 @@ POLL_INTERVAL_SECONDS = 5
 # Maps (asset, side) → UTC datetime of last attempt.
 _execution_attempts: dict[tuple[str, str], datetime] = {}
 
+# Risk guard alert deduplication — True while trading is halted so we only
+# fire the Telegram alert on the transition into the blocked state, not every cycle.
+_risk_guard_currently_blocked: bool = False
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -551,17 +555,23 @@ def main() -> None:
 
                 # 3. Risk guard — check all three circuit breakers
                 if not args.dry_run:
+                    global _risk_guard_currently_blocked
                     risk = check_risk(current_balance=current_balance, session_start_balance=session_start_balance)
                     if not risk.allowed:
-                        from service.telegram_service import send_risk_guard_blocked
-                        send_risk_guard_blocked(risk.reason)
-                        logger.warning("Risk guard halted trading this cycle.")
+                        if not _risk_guard_currently_blocked:
+                            # First cycle in blocked state — fire alert once
+                            from service.telegram_service import send_risk_guard_blocked
+                            send_risk_guard_blocked(risk.reason)
+                            _risk_guard_currently_blocked = True
+                        logger.warning("Risk guard halted trading this cycle: %s", risk.reason)
                         stats["cycles_completed"] += 1
                         stats["last_cycle_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
                         stats["db_ok"] = True
                         logger.info("Sleeping %ds until next cycle...", POLL_INTERVAL_SECONDS)
                         time.sleep(POLL_INTERVAL_SECONDS)
                         continue
+                    else:
+                        _risk_guard_currently_blocked = False  # reset when unblocked
 
                 # 4. Balance warning check
                 if not args.dry_run:

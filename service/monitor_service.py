@@ -6,7 +6,10 @@ and fires Telegram alerts on state transitions.
 Called once per yield farming cycle (after execution). Also handles the daily
 summary at 23:00 UTC.
 
-Lifecycle: submitted → filled → won | lost → settled_at set after 30min
+Lifecycle: submitted → filled → won | lost (detected via curPrice in open positions)
+Won/lost positions remain in the open positions API until claimed (redeemable=true).
+Resolution is detected by curPrice >= 0.99 (won) or curPrice <= 0.01 (lost), NOT by
+disappearance from the open positions list.
 """
 
 import logging
@@ -18,7 +21,7 @@ from dotenv import load_dotenv
 
 from service import db_service, telegram_service
 from utility.constants import REQUEST_TIMEOUT_SECONDS
-from utility.endpoints import POSITIONS, CLOSED_POSITIONS
+from utility.endpoints import POSITIONS
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -43,16 +46,6 @@ def _fetch_open_positions() -> list[dict]:
         return []
 
 
-def _fetch_closed_positions() -> list[dict]:
-    """Fetch recent closed positions for our wallet (last 500)."""
-    try:
-        resp = requests.get(CLOSED_POSITIONS, params={"user": _OUR_WALLET, "limit": 500}, timeout=REQUEST_TIMEOUT_SECONDS)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.warning("Monitor: could not fetch closed positions: %s", e)
-        return []
-
 
 def poll_lifecycle() -> None:
     """
@@ -71,82 +64,77 @@ def poll_lifecycle() -> None:
     now_utc = datetime.now(timezone.utc)
     open_positions = _fetch_open_positions()
 
-    # Build lookup: (conditionId, outcome) → position dict for open positions
+    # Build lookup: (conditionId, outcome_lower) → position dict for open positions.
+    # Outcome strings are lowercased on both sides to guard against API case divergence
+    # (Gamma returns "Down", positions API may return "down" or "DOWN").
     open_pos_lookup: dict[tuple[str, str], dict] = {}
     for pos in open_positions:
-        key = (pos.get("conditionId", ""), pos.get("outcome", ""))
+        key = (pos.get("conditionId", ""), pos.get("outcome", "").lower())
         open_pos_lookup[key] = pos
-
-    # We only fetch closed positions once if any trade needs resolution check
-    closed_positions: list[dict] = []
-    closed_fetched = False
 
     for trade in open_trades:
         trade_id = trade["id"]
         condition_id = trade["condition_id"]
-        outcome = trade["outcome"]
+        outcome = trade["outcome"].lower()  # normalize for consistent key matching
         key = (condition_id, outcome)
-
-        # ── submitted → filled ────────────────────────────────────────────────
-        if trade["status"] == "submitted" and key in open_pos_lookup:
-            pos = open_pos_lookup[key]
-            fill_price = float(pos.get("curPrice", trade["signal_price"] or 0))
-            db_service.update_yield_trade(trade_id, status="filled", fill_price=fill_price)
-            logger.info("Monitor: trade %d status → filled @ $%.4f (%s)", trade_id, fill_price, trade["title"][:50])
-            continue
-
-        # ── filled/submitted → won or lost ────────────────────────────────────
-        # Only check if not in open positions (resolved) and past submitted time
+        cost = float(trade["cost_usd"] or 0)
         submitted_at = trade.get("submitted_at")
-        if key not in open_pos_lookup:
-            if not closed_fetched:
-                closed_positions = _fetch_closed_positions()
-                closed_fetched = True
 
-            closed_lookup: dict[tuple[str, str], dict] = {
-                (p.get("conditionId", ""), p.get("outcome", "")): p
-                for p in closed_positions
-            }
+        if key in open_pos_lookup:
+            pos = open_pos_lookup[key]
+            cur_price = float(pos.get("curPrice", 0.5))
 
-            if key in closed_lookup:
-                closed = closed_lookup[key]
-                realized_pnl = float(closed.get("realizedPnl", 0))
-                cost = float(trade["cost_usd"] or 0)
-                if realized_pnl > 0:
-                    db_service.update_yield_trade(
-                        trade_id,
-                        status="won",
-                        pnl_usd=realized_pnl,
-                        resolved_at=now_utc,
-                    )
-                    logger.info("Monitor: trade %d WON — pnl=$%.4f (%s)", trade_id, realized_pnl, trade["title"][:50])
-                    summary = db_service.get_yield_pnl_summary()
-                    telegram_service.send_yield_trade_won(
-                        title=trade["title"],
-                        outcome=outcome,
-                        pnl_usd=realized_pnl,
-                        session_net_pnl=summary["net_pnl"],
-                        win_rate=summary["win_rate"],
-                    )
-                else:
-                    db_service.update_yield_trade(
-                        trade_id,
-                        status="lost",
-                        pnl_usd=-cost,
-                        resolved_at=now_utc,
-                    )
-                    logger.info("Monitor: trade %d LOST — cost=$%.4f (%s)", trade_id, cost, trade["title"][:50])
-                    summary = db_service.get_yield_pnl_summary()
-                    telegram_service.send_yield_trade_lost(
-                        title=trade["title"],
-                        outcome=outcome,
-                        loss_usd=cost,
-                        session_net_pnl=summary["net_pnl"],
-                        win_rate=summary["win_rate"],
-                    )
+            # ── resolved won: curPrice settled at $1 ──────────────────────────
+            # Polymarket keeps redeemable positions in open positions until claimed.
+            # We detect resolution via curPrice, not by waiting for disappearance.
+            if cur_price >= 0.99:
+                cash_pnl = float(pos.get("cashPnl", 0))
+                pnl = cash_pnl if cash_pnl > 0 else (float(pos.get("currentValue", 0)) - float(pos.get("initialValue", cost)))
+                db_service.update_yield_trade(
+                    trade_id,
+                    status="won",
+                    pnl_usd=round(pnl, 4),
+                    resolved_at=now_utc,
+                )
+                logger.info("Monitor: trade %d WON — pnl=$%.4f (%s)", trade_id, pnl, trade["title"][:50])
+                summary = db_service.get_yield_pnl_summary()
+                telegram_service.send_yield_trade_won(
+                    title=trade["title"],
+                    outcome=trade["outcome"],
+                    pnl_usd=pnl,
+                    session_net_pnl=summary["net_pnl"],
+                    win_rate=summary["win_rate"],
+                )
+                continue
 
-            # Flag trades stuck > 24h with no resolution
-            elif submitted_at:
+            # ── resolved lost: curPrice settled at $0 ────────────────────────
+            elif cur_price <= 0.01:
+                db_service.update_yield_trade(
+                    trade_id,
+                    status="lost",
+                    pnl_usd=-cost,
+                    resolved_at=now_utc,
+                )
+                logger.info("Monitor: trade %d LOST — cost=$%.4f (%s)", trade_id, cost, trade["title"][:50])
+                summary = db_service.get_yield_pnl_summary()
+                telegram_service.send_yield_trade_lost(
+                    title=trade["title"],
+                    outcome=trade["outcome"],
+                    loss_usd=cost,
+                    session_net_pnl=summary["net_pnl"],
+                    win_rate=summary["win_rate"],
+                )
+                continue
+
+            # ── still active: advance submitted → filled ──────────────────────
+            elif trade["status"] == "submitted":
+                db_service.update_yield_trade(trade_id, status="filled", fill_price=cur_price)
+                logger.info("Monitor: trade %d status → filled @ $%.4f (%s)", trade_id, cur_price, trade["title"][:50])
+
+        else:
+            # Position gone from open positions entirely — either claimed or never filled.
+            # Flag as stuck if unresolved after _STUCK_HOURS.
+            if submitted_at:
                 try:
                     submitted_dt = datetime.fromisoformat(str(submitted_at)) if isinstance(submitted_at, str) else submitted_at
                     if submitted_dt.tzinfo is None:
@@ -156,7 +144,7 @@ def poll_lifecycle() -> None:
                         logger.warning("Monitor: trade %d stuck >%dh — marking error", trade_id, _STUCK_HOURS)
                         telegram_service.send_yield_error(
                             context=f"Trade {trade_id} stuck >{_STUCK_HOURS}h",
-                            error=f"Market: {trade['title'][:80]} | Outcome: {outcome}"
+                            error=f"Market: {trade['title'][:80]} | Outcome: {trade['outcome']}"
                         )
                 except Exception as e:
                     logger.warning("Monitor: error parsing submitted_at for trade %d: %s", trade_id, e)
