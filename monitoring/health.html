@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Health Check — Yield Farming Monitor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+
+    /* ── Nav ── */
+    .nav { display: flex; gap: 8px; margin-bottom: 24px; }
+    .nav a { color: #94a3b8; text-decoration: none; padding: 6px 16px; border-radius: 6px; font-size: 0.85rem; transition: background 0.15s; }
+    .nav a.active { background: #3b4fd9; color: #fff; }
+    .nav a:hover:not(.active) { background: #2d3348; color: #f1f5f9; }
+
+    /* ── Header ── */
+    .header { margin-bottom: 32px; }
+    h1 { font-size: 1.4rem; font-weight: 600; color: #f8fafc; }
+    .subtitle { font-size: 0.82rem; color: #64748b; margin-top: 4px; }
+
+    /* ── Start button ── */
+    .start-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 340px; gap: 16px; }
+    .start-btn {
+      background: linear-gradient(135deg, #3b4fd9 0%, #6366f1 100%);
+      border: none; color: #fff; padding: 18px 52px;
+      border-radius: 14px; font-size: 1.1rem; font-weight: 600;
+      cursor: pointer; letter-spacing: 0.02em;
+      box-shadow: 0 0 32px rgba(99,102,241,0.35);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .start-btn:hover { transform: translateY(-2px); box-shadow: 0 0 48px rgba(99,102,241,0.5); }
+    .start-btn:active { transform: translateY(0); }
+    .start-hint { color: #475569; font-size: 0.82rem; }
+
+    /* ── Running state ── */
+    .running-wrap { display: flex; flex-direction: column; align-items: center; min-height: 340px; justify-content: center; gap: 12px; }
+    .spinner {
+      width: 44px; height: 44px; border: 3px solid #2d3348;
+      border-top-color: #6366f1; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .running-label { color: #64748b; font-size: 0.9rem; }
+
+    /* ── Results ── */
+    .results-wrap { max-width: 640px; margin: 0 auto; }
+
+    /* Score circle */
+    .score-section { display: flex; flex-direction: column; align-items: center; margin-bottom: 36px; }
+    .score-ring-wrap { position: relative; width: 140px; height: 140px; margin-bottom: 16px; }
+    .score-ring-wrap svg { transform: rotate(-90deg); }
+    .score-center {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+    }
+    .score-num { font-size: 2.2rem; font-weight: 800; line-height: 1; }
+    .score-denom { font-size: 0.75rem; color: #64748b; }
+    .grade-badge {
+      font-size: 3rem; font-weight: 800; line-height: 1;
+      text-shadow: 0 0 24px currentColor;
+    }
+    .score-label { font-size: 0.85rem; color: #94a3b8; margin-top: 6px; }
+
+    /* Check items */
+    .check-list { display: flex; flex-direction: column; gap: 12px; }
+    .check-item {
+      background: #1e2130; border-radius: 10px; padding: 16px 20px;
+      border: 1px solid #2d3348; display: flex; align-items: center; gap: 16px;
+      opacity: 0; transform: translateY(12px);
+      transition: opacity 0.35s ease, transform 0.35s ease, border-color 0.3s;
+    }
+    .check-item.visible { opacity: 1; transform: translateY(0); }
+    .check-item.pass { border-color: #166534; }
+    .check-item.partial { border-color: #92400e; }
+    .check-item.fail { border-color: #7f1d1d; }
+
+    .check-icon { font-size: 1.3rem; flex-shrink: 0; width: 28px; text-align: center; }
+    .check-body { flex: 1; }
+    .check-name { font-size: 0.88rem; font-weight: 600; color: #e2e8f0; }
+    .check-detail { font-size: 0.78rem; color: #64748b; margin-top: 3px; }
+    .check-score {
+      font-size: 0.85rem; font-weight: 700; white-space: nowrap;
+      flex-shrink: 0; text-align: right;
+    }
+
+    /* Score bar */
+    .score-bar-wrap { margin-top: 6px; }
+    .score-bar { height: 4px; border-radius: 2px; background: #2d3348; }
+    .score-bar-fill { height: 4px; border-radius: 2px; transition: width 0.6s ease; }
+
+    /* Rerun button */
+    .rerun-wrap { display: flex; justify-content: center; margin-top: 28px; }
+    .rerun-btn {
+      background: #2d3348; border: 1px solid #3b4fd9; color: #94a3b8;
+      padding: 8px 24px; border-radius: 8px; cursor: pointer; font-size: 0.85rem;
+    }
+    .rerun-btn:hover { color: #f1f5f9; background: #3b4fd9; }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <a href="/">Overview</a>
+    <a href="/analytics">Analytics</a>
+    <a href="/health" class="active">Health Check</a>
+  </nav>
+
+  <div class="header">
+    <h1>Health Check</h1>
+    <div class="subtitle">Scored assessment of bot health across 5 dimensions</div>
+  </div>
+
+  <!-- Start state -->
+  <div class="start-wrap" id="start-wrap">
+    <button class="start-btn" id="start-btn" onclick="runCheck()">Run Health Check</button>
+    <div class="start-hint">Checks bot liveness, balance, risk guards, win rate, and stuck trades</div>
+  </div>
+
+  <!-- Running state -->
+  <div class="running-wrap hidden" id="running-wrap">
+    <div class="spinner"></div>
+    <div class="running-label">Running checks…</div>
+  </div>
+
+  <!-- Results state -->
+  <div class="results-wrap hidden" id="results-wrap">
+
+    <div class="score-section">
+      <div class="score-ring-wrap">
+        <svg viewBox="0 0 140 140" width="140" height="140">
+          <circle cx="70" cy="70" r="58" fill="none" stroke="#2d3348" stroke-width="10"/>
+          <circle id="ring-arc" cx="70" cy="70" r="58" fill="none" stroke="#4ade80"
+            stroke-width="10" stroke-linecap="round"
+            stroke-dasharray="364.4" stroke-dashoffset="364.4"
+            style="transition: stroke-dashoffset 1s ease, stroke 0.5s"/>
+        </svg>
+        <div class="score-center">
+          <div class="score-num" id="score-num">—</div>
+          <div class="score-denom">/ 100</div>
+        </div>
+      </div>
+      <div class="grade-badge" id="grade-badge">—</div>
+      <div class="score-label" id="grade-label">—</div>
+    </div>
+
+    <div class="check-list" id="check-list"></div>
+
+    <div class="rerun-wrap">
+      <button class="rerun-btn" onclick="runCheck()">Run Again</button>
+    </div>
+  </div>
+
+<script>
+  const CHECK_ORDER = ['bot_alive', 'balance', 'risk_guards', 'win_rate', 'stuck_trades'];
+
+  function gradeLabel(grade) {
+    return { A: 'Excellent', B: 'Good', C: 'Fair', D: 'Poor', F: 'Critical' }[grade] || '';
+  }
+
+  function checkIcon(item) {
+    if (item.passed) return '✅';
+    if (item.score > 0) return '⚠️';
+    return '❌';
+  }
+
+  function checkClass(item) {
+    if (item.passed) return 'pass';
+    if (item.score > 0) return 'partial';
+    return 'fail';
+  }
+
+  function scoreColor(score, max) {
+    const pct = score / max;
+    if (pct >= 0.85) return '#4ade80';
+    if (pct >= 0.6) return '#fbbf24';
+    return '#f87171';
+  }
+
+  async function runCheck() {
+    document.getElementById('start-wrap').classList.add('hidden');
+    document.getElementById('results-wrap').classList.add('hidden');
+    document.getElementById('running-wrap').classList.remove('hidden');
+
+    try {
+      const data = await fetch('/api/health/check').then(r => r.json());
+
+      document.getElementById('running-wrap').classList.add('hidden');
+      const resultsEl = document.getElementById('results-wrap');
+      resultsEl.classList.remove('hidden');
+
+      // Animate ring
+      const circumference = 364.4;
+      const pct = data.score / data.max_score;
+      const offset = circumference * (1 - pct);
+      const arc = document.getElementById('ring-arc');
+      setTimeout(() => {
+        arc.style.strokeDashoffset = offset;
+        arc.style.stroke = data.grade_color;
+      }, 100);
+
+      // Score number count-up
+      const scoreEl = document.getElementById('score-num');
+      scoreEl.style.color = data.grade_color;
+      let current = 0;
+      const target = data.score;
+      const step = Math.ceil(target / 20);
+      const counter = setInterval(() => {
+        current = Math.min(current + step, target);
+        scoreEl.textContent = current;
+        if (current >= target) clearInterval(counter);
+      }, 40);
+
+      // Grade
+      const gradeEl = document.getElementById('grade-badge');
+      gradeEl.textContent = data.grade;
+      gradeEl.style.color = data.grade_color;
+      document.getElementById('grade-label').textContent = gradeLabel(data.grade);
+
+      // Cascading check items
+      const listEl = document.getElementById('check-list');
+      listEl.innerHTML = '';
+
+      CHECK_ORDER.forEach((key, idx) => {
+        const item = data.checks[key];
+        if (!item) return;
+
+        const pctScore = item.score / item.max;
+        const barColor = scoreColor(item.score, item.max);
+
+        const el = document.createElement('div');
+        el.className = `check-item ${checkClass(item)}`;
+        el.innerHTML = `
+          <div class="check-icon">${checkIcon(item)}</div>
+          <div class="check-body">
+            <div class="check-name">${item.label}</div>
+            <div class="check-detail">${item.detail}</div>
+            <div class="score-bar-wrap">
+              <div class="score-bar">
+                <div class="score-bar-fill" id="bar-${key}" style="width:0%;background:${barColor}"></div>
+              </div>
+            </div>
+          </div>
+          <div class="check-score" style="color:${barColor}">${item.score} / ${item.max}</div>
+        `;
+        listEl.appendChild(el);
+
+        // Stagger: appear after delay, then animate bar
+        setTimeout(() => {
+          el.classList.add('visible');
+          setTimeout(() => {
+            document.getElementById(`bar-${key}`).style.width = `${pctScore * 100}%`;
+          }, 150);
+        }, 200 + idx * 280);
+      });
+
+    } catch (err) {
+      document.getElementById('running-wrap').classList.add('hidden');
+      document.getElementById('start-wrap').classList.remove('hidden');
+      alert('Health check failed: ' + err.message);
+    }
+  }
+</script>
+</body>
+</html>

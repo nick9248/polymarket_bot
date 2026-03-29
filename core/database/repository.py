@@ -290,6 +290,34 @@ def get_open_yield_trades(conn: psycopg2.extensions.connection) -> list[dict]:
     return [dict(zip(cols, row)) for row in rows]
 
 
+def get_session_realized_losses(
+    conn: psycopg2.extensions.connection,
+    session_start_time,
+) -> float:
+    """
+    Return total cost_usd of confirmed 'lost' yield trades since session_start_time.
+
+    Used by risk_guard_service to measure drawdown from real losses only —
+    ignoring in-flight positions that have temporarily reduced the CLOB balance.
+
+    Args:
+        conn: Open psycopg2 connection.
+        session_start_time: Datetime marking the start of the current session.
+
+    Returns:
+        Sum of cost_usd for all lost trades since session_start_time (0.0 if none).
+    """
+    sql = """
+        SELECT COALESCE(SUM(cost_usd), 0)
+        FROM yield_trades
+        WHERE status = 'lost'
+        AND submitted_at >= %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (session_start_time,))
+        return float(cur.fetchone()[0])
+
+
 def get_recent_yield_trade_statuses(
     conn: psycopg2.extensions.connection,
     limit: int = 3,
@@ -431,6 +459,26 @@ def get_yield_trades_page(
         for dt_col in ("submitted_at", "resolved_at", "settled_at"):
             if d.get(dt_col) is not None:
                 d[dt_col] = d[dt_col].isoformat()
+        result.append(d)
+    return result
+
+
+def get_yield_trades_for_analytics(conn: psycopg2.extensions.connection) -> list[dict]:
+    """Return all yield_trades rows needed for analytics (minimal columns, oldest first)."""
+    sql = """
+        SELECT title, outcome, status, submitted_at, pnl_usd, cost_usd, fill_price
+        FROM yield_trades
+        ORDER BY submitted_at ASC
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+    result = []
+    for row in rows:
+        d = dict(zip(cols, row))
+        if d.get("submitted_at") is not None:
+            d["submitted_at"] = d["submitted_at"].isoformat()
         result.append(d)
     return result
 

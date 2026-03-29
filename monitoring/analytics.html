@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Analytics — Yield Farming Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+
+    /* ── Nav ── */
+    .nav { display: flex; gap: 8px; margin-bottom: 24px; }
+    .nav a { color: #94a3b8; text-decoration: none; padding: 6px 16px; border-radius: 6px; font-size: 0.85rem; transition: background 0.15s; }
+    .nav a.active { background: #3b4fd9; color: #fff; }
+    .nav a:hover:not(.active) { background: #2d3348; color: #f1f5f9; }
+
+    /* ── Header ── */
+    .header { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+    h1 { font-size: 1.4rem; font-weight: 600; color: #f8fafc; }
+    .subtitle { font-size: 0.82rem; color: #64748b; margin-top: 2px; }
+
+    /* ── Cards ── */
+    .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+    .card { background: #1e2130; border-radius: 10px; padding: 18px; border: 1px solid #2d3348; margin-bottom: 16px; }
+    .card-title { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    .card-title h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
+    .metric { font-size: 1.6rem; font-weight: 700; color: #f1f5f9; }
+    .metric-sub { font-size: 0.8rem; color: #64748b; margin-top: 4px; }
+    .metric-warn { color: #fb923c; }
+    .metric-ok { color: #4ade80; }
+
+    /* ── Info icon ── */
+    .info-icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: #2d3348; color: #64748b; font-size: 0.65rem; font-weight: 700;
+      cursor: default; position: relative; user-select: none; flex-shrink: 0;
+    }
+    .info-icon:hover .info-tooltip { display: block; }
+    .info-tooltip {
+      display: none; position: absolute; left: 22px; top: -4px;
+      background: #1e2130; border: 1px solid #3b4fd9; border-radius: 8px;
+      padding: 10px 14px; width: 280px; z-index: 100;
+      font-size: 0.76rem; color: #cbd5e1; line-height: 1.5;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+
+    /* ── Asset breakdown table ── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th { text-align: left; padding: 7px 10px; color: #64748b; font-weight: 500; border-bottom: 1px solid #2d3348; }
+    td { padding: 7px 10px; border-bottom: 1px solid #1a1f2e; }
+    tr:hover td { background: #252a3a; }
+    .won-cell { color: #4ade80; font-weight: 600; }
+    .lost-cell { color: #f87171; font-weight: 600; }
+    .err-cell-s { color: #fb923c; }
+    .win-bar { height: 6px; border-radius: 3px; background: #2d3348; margin-top: 3px; }
+    .win-bar-fill { height: 6px; border-radius: 3px; background: #3b4fd9; }
+
+    /* ── Heatmap ── */
+    .heatmap { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; margin-top: 4px; }
+    .heatmap-cell {
+      aspect-ratio: 1; border-radius: 3px; display: flex; align-items: center; justify-content: center;
+      font-size: 0.5rem; color: rgba(255,255,255,0.5); cursor: default;
+    }
+    .heatmap-labels { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; margin-top: 4px; }
+    .heatmap-label { font-size: 0.58rem; color: #475569; text-align: center; }
+
+    /* ── Loading state ── */
+    .loading { color: #475569; text-align: center; padding: 40px; font-size: 0.9rem; }
+    .error-msg { color: #f87171; text-align: center; padding: 20px; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+
+  <nav class="nav">
+    <a href="/">Overview</a>
+    <a href="/analytics" class="active">Analytics</a>
+    <a href="/health">Health Check</a>
+  </nav>
+
+  <div class="header">
+    <div>
+      <h1>Analytics</h1>
+      <div class="subtitle">All-time trade performance breakdown</div>
+    </div>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="grid3">
+    <div class="card" style="margin-bottom:0">
+      <div class="card-title">
+        <h2>Total Trades</h2>
+        <span class="info-icon">i<div class="info-tooltip">Total number of yield_trades rows in the database across all statuses.</div></span>
+      </div>
+      <div class="metric" id="stat-total">—</div>
+      <div class="metric-sub" id="stat-resolved">Loading...</div>
+    </div>
+    <div class="card" style="margin-bottom:0">
+      <div class="card-title">
+        <h2>Error Rate</h2>
+        <span class="info-icon">i<div class="info-tooltip">Percentage of trades that ended in the 'error' status (failed to execute). High values indicate recurring execution issues.</div></span>
+      </div>
+      <div class="metric" id="stat-error-rate">—</div>
+      <div class="metric-sub">of all submitted trades</div>
+    </div>
+    <div class="card" style="margin-bottom:0">
+      <div class="card-title">
+        <h2>Pending Settlement</h2>
+        <span class="info-icon">i<div class="info-tooltip">Number of trades currently in 'submitted' or 'filled' status — waiting for market resolution or CLOB fill.</div></span>
+      </div>
+      <div class="metric" id="stat-pending">—</div>
+      <div class="metric-sub">submitted or filled</div>
+    </div>
+  </div>
+
+  <div style="height:16px"></div>
+
+  <!-- Asset breakdown -->
+  <div class="card">
+    <div class="card-title">
+      <h2>Asset Breakdown</h2>
+      <span class="info-icon">i<div class="info-tooltip">Top 15 markets by trade count. Win rate bar shows won/(won+lost). Pending includes submitted and filled trades.</div></span>
+    </div>
+    <div id="asset-table-wrap"><div class="loading">Loading...</div></div>
+  </div>
+
+  <!-- Hourly heatmap -->
+  <div class="card">
+    <div class="card-title">
+      <h2>Hour-of-Day Activity (UTC)</h2>
+      <span class="info-icon">i<div class="info-tooltip">Trade count by hour of day (UTC). Darker = more trades. Helps identify active trading windows and when Up/Down markets are most available.</div></span>
+    </div>
+    <div id="heatmap-wrap"><div class="loading">Loading...</div></div>
+  </div>
+
+  <!-- Rolling win rate chart -->
+  <div class="card">
+    <div class="card-title">
+      <h2>Rolling Win Rate (10-trade window)</h2>
+      <span class="info-icon">i<div class="info-tooltip">Win rate computed over the last 10 resolved trades (won/lost) at each point in time. Smooths out variance — a sustained drop below 50% signals a systematic problem.</div></span>
+    </div>
+    <canvas id="rolling-chart" height="70"></canvas>
+  </div>
+
+  <!-- Daily frequency chart -->
+  <div class="card">
+    <div class="card-title">
+      <h2>Daily Trade Frequency</h2>
+      <span class="info-icon">i<div class="info-tooltip">Number of trades placed per calendar day (UTC). Spikes may indicate high market availability windows. Zero-activity days are normal outside US market hours.</div></span>
+    </div>
+    <canvas id="freq-chart" height="70"></canvas>
+  </div>
+
+<script>
+  let rollingChart = null;
+  let freqChart = null;
+
+  function heatmapColor(count, maxCount) {
+    if (count === 0) return '#1a1f2e';
+    const intensity = Math.min(count / Math.max(maxCount, 1), 1);
+    // Blue scale: dark blue → bright blue
+    const r = Math.round(30 + intensity * 29);
+    const g = Math.round(40 + intensity * 75);
+    const b = Math.round(80 + intensity * 137);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  async function load() {
+    try {
+      const data = await fetch('/api/analytics/data').then(r => r.json());
+      if (data.error) {
+        document.getElementById('asset-table-wrap').innerHTML = `<div class="error-msg">Error: ${data.error}</div>`;
+        return;
+      }
+
+      // Summary cards
+      document.getElementById('stat-total').textContent = data.total_trades;
+      const resolved = data.asset_breakdown.reduce((s, a) => s + a.won + a.lost, 0);
+      document.getElementById('stat-resolved').textContent = `${resolved} resolved (won/lost)`;
+      const errEl = document.getElementById('stat-error-rate');
+      errEl.textContent = `${data.error_rate}%`;
+      errEl.className = 'metric ' + (data.error_rate > 20 ? 'metric-warn' : 'metric-ok');
+      const pendEl = document.getElementById('stat-pending');
+      pendEl.textContent = data.pending_settlement;
+      pendEl.className = 'metric ' + (data.pending_settlement > 5 ? 'metric-warn' : '');
+
+      // Asset breakdown table
+      const rows = data.asset_breakdown.map(a => {
+        const total = a.won + a.lost;
+        const wr = total > 0 ? Math.round(a.won / total * 100) : null;
+        const wrBar = wr !== null
+          ? `<div class="win-bar"><div class="win-bar-fill" style="width:${wr}%"></div></div>`
+          : '';
+        const wrText = wr !== null ? `${wr}%` : '<span style="color:#475569">—</span>';
+        return `<tr>
+          <td title="${a.title}">${a.title.length > 45 ? a.title.slice(0,45) + '…' : a.title}</td>
+          <td>${a.total}</td>
+          <td class="won-cell">${a.won}</td>
+          <td class="lost-cell">${a.lost}</td>
+          <td class="err-cell-s">${a.error || 0}</td>
+          <td>${a.pending || 0}</td>
+          <td style="min-width:80px">${wrText}${wrBar}</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('asset-table-wrap').innerHTML = `
+        <table>
+          <thead><tr><th>Market</th><th>Total</th><th>Won</th><th>Lost</th><th>Error</th><th>Pending</th><th>Win Rate</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="7" style="color:#475569;text-align:center;padding:20px">No data</td></tr>'}</tbody>
+        </table>`;
+
+      // Heatmap
+      const heatmap = data.hourly_heatmap;
+      const maxCount = Math.max(...heatmap.map(h => h.count), 1);
+      const cells = heatmap.map(h => {
+        const bg = heatmapColor(h.count, maxCount);
+        const label = h.count > 0 ? h.count : '';
+        return `<div class="heatmap-cell" style="background:${bg}" title="${h.hour}:00 UTC — ${h.count} trade(s)">${label}</div>`;
+      }).join('');
+      const labels = heatmap.map(h => `<div class="heatmap-label">${h.hour}</div>`).join('');
+      document.getElementById('heatmap-wrap').innerHTML =
+        `<div class="heatmap">${cells}</div><div class="heatmap-labels">${labels}</div>`;
+
+      // Rolling win rate chart
+      const rolling = data.rolling_win_rate;
+      if (rolling.length > 0) {
+        const rrCtx = document.getElementById('rolling-chart').getContext('2d');
+        rollingChart = new Chart(rrCtx, {
+          type: 'line',
+          data: {
+            labels: rolling.map(r => `#${r.index}`),
+            datasets: [{
+              label: 'Win Rate',
+              data: rolling.map(r => (r.win_rate * 100).toFixed(1)),
+              borderColor: '#60a5fa',
+              backgroundColor: 'rgba(96,165,250,0.08)',
+              tension: 0.3, fill: true, pointRadius: 2,
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#64748b', maxTicksLimit: 15 }, grid: { color: '#1e2130' } },
+              y: {
+                ticks: { color: '#64748b', callback: v => v + '%' },
+                grid: { color: '#2d3348' }, min: 0, max: 100,
+              },
+            }
+          }
+        });
+      } else {
+        document.getElementById('rolling-chart').parentElement.innerHTML += '<div class="loading" style="padding:20px">No resolved trades yet</div>';
+      }
+
+      // Daily frequency chart
+      const freq = data.daily_frequency;
+      if (freq.length > 0) {
+        const fCtx = document.getElementById('freq-chart').getContext('2d');
+        freqChart = new Chart(fCtx, {
+          type: 'bar',
+          data: {
+            labels: freq.map(d => d.date),
+            datasets: [{
+              label: 'Trades',
+              data: freq.map(d => d.count),
+              backgroundColor: 'rgba(59,79,217,0.7)',
+              borderColor: '#3b4fd9',
+              borderWidth: 1,
+              borderRadius: 3,
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#64748b' }, grid: { color: '#1e2130' } },
+              y: { ticks: { color: '#64748b', stepSize: 1 }, grid: { color: '#2d3348' }, beginAtZero: true },
+            }
+          }
+        });
+      } else {
+        document.getElementById('freq-chart').parentElement.innerHTML += '<div class="loading" style="padding:20px">No trade data yet</div>';
+      }
+
+    } catch (err) {
+      document.getElementById('asset-table-wrap').innerHTML = `<div class="error-msg">Failed to load: ${err.message}</div>`;
+    }
+  }
+
+  load();
+  setInterval(load, 30000);
+</script>
+</body>
+</html>

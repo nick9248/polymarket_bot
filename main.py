@@ -501,6 +501,7 @@ def main() -> None:
 
     # Fetch USDC balance once at session start — used for drawdown calculation
     session_start_balance = 0.0
+    session_start_time = datetime.now(timezone.utc)
     if args.yield_farming:
         pk = os.getenv("poly_private_key", "").strip(" '\"")
         if pk:
@@ -556,7 +557,7 @@ def main() -> None:
                 # 3. Risk guard — check all three circuit breakers
                 if not args.dry_run:
                     global _risk_guard_currently_blocked
-                    risk = check_risk(current_balance=current_balance, session_start_balance=session_start_balance)
+                    risk = check_risk(current_balance=current_balance, session_start_balance=session_start_balance, session_start_time=session_start_time)
                     if not risk.allowed:
                         if not _risk_guard_currently_blocked:
                             # First cycle in blocked state — fire alert once

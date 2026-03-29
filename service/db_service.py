@@ -184,6 +184,15 @@ def get_open_yield_trades() -> list[dict]:
         conn.close()
 
 
+def get_session_realized_losses(session_start_time) -> float:
+    """Return total cost_usd of confirmed lost trades since session_start_time."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_session_realized_losses(conn, session_start_time)
+    finally:
+        conn.close()
+
+
 def get_recent_yield_trade_statuses(limit: int = 3) -> list[str]:
     """Return the most recent N resolved yield trade statuses ('won' or 'lost')."""
     conn = connection.get_connection()
@@ -216,6 +225,15 @@ def get_yield_trades_page(status: str | None = None, limit: int = 50, offset: in
     conn = connection.get_connection()
     try:
         return repository.get_yield_trades_page(conn, status=status, limit=limit, offset=offset)
+    finally:
+        conn.close()
+
+
+def get_yield_trades_for_analytics() -> list[dict]:
+    """Return all yield_trades for analytics processing (minimal columns)."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_yield_trades_for_analytics(conn)
     finally:
         conn.close()
 

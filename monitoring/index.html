@@ -8,7 +8,36 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 24px; }
-    h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 20px; color: #f8fafc; }
+
+    /* ── Nav ── */
+    .nav { display: flex; gap: 8px; margin-bottom: 24px; }
+    .nav a { color: #94a3b8; text-decoration: none; padding: 6px 16px; border-radius: 6px; font-size: 0.85rem; transition: background 0.15s; }
+    .nav a.active { background: #3b4fd9; color: #fff; }
+    .nav a:hover:not(.active) { background: #2d3348; color: #f1f5f9; }
+
+    /* ── Header ── */
+    .header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+    h1 { font-size: 1.4rem; font-weight: 600; color: #f8fafc; }
+    .info-icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; border-radius: 50%;
+      background: #2d3348; color: #94a3b8; font-size: 0.7rem; font-weight: 700;
+      cursor: default; position: relative; user-select: none;
+    }
+    .info-icon:hover .info-tooltip { display: block; }
+    .info-tooltip {
+      display: none; position: absolute; left: 28px; top: -4px;
+      background: #1e2130; border: 1px solid #3b4fd9; border-radius: 8px;
+      padding: 14px 16px; width: 360px; z-index: 100;
+      font-size: 0.78rem; color: #cbd5e1; line-height: 1.55;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .info-tooltip h3 { color: #f1f5f9; font-size: 0.82rem; margin-bottom: 8px; }
+    .info-tooltip .guard { margin-bottom: 10px; }
+    .info-tooltip .guard-name { color: #60a5fa; font-weight: 600; }
+    .info-tooltip .guard-ex { color: #64748b; font-style: italic; }
+
+    /* ── Cards ── */
     .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
     .card { background: #1e2130; border-radius: 10px; padding: 18px; border: 1px solid #2d3348; }
     .card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 12px; }
@@ -20,8 +49,12 @@
     .badge.err { background: #450a0a; color: #f87171; }
     .breaker { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #2d3348; font-size: 0.85rem; }
     .breaker:last-child { border-bottom: none; }
+
+    /* ── Chart ── */
     .chart-card { background: #1e2130; border-radius: 10px; padding: 18px; border: 1px solid #2d3348; margin-bottom: 16px; }
     .chart-card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 12px; }
+
+    /* ── Trades table ── */
     table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
     th { text-align: left; padding: 8px 10px; color: #64748b; font-weight: 500; border-bottom: 1px solid #2d3348; }
     td { padding: 8px 10px; border-bottom: 1px solid #1a1f2e; }
@@ -32,16 +65,71 @@
     .status-error { color: #fb923c; }
     .pnl-pos { color: #4ade80; }
     .pnl-neg { color: #f87171; }
-    .filter-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+
+    /* ── Filter + timezone toolbar ── */
+    .table-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+    .filter-bar { display: flex; gap: 8px; flex-wrap: wrap; }
     .filter-btn { background: #2d3348; border: none; color: #94a3b8; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
     .filter-btn.active { background: #3b4fd9; color: #fff; }
+    .tz-toggle { background: #2d3348; border: 1px solid #3b4fd9; color: #94a3b8; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 0.78rem; white-space: nowrap; }
+    .tz-toggle:hover { color: #e2e8f0; }
+
+    /* ── Pagination ── */
+    .pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 12px; }
+    .page-btn { background: #2d3348; border: none; color: #94a3b8; padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
+    .page-btn:hover:not(:disabled) { background: #3b4fd9; color: #fff; }
+    .page-btn:disabled { opacity: 0.35; cursor: default; }
+    .page-info { font-size: 0.8rem; color: #64748b; }
+
+    /* ── Error tooltip ── */
+    .err-cell { position: relative; cursor: default; }
+    .err-cell .err-tip {
+      display: none; position: absolute; bottom: 100%; left: 0;
+      background: #1e2130; border: 1px solid #fb923c; border-radius: 6px;
+      padding: 6px 10px; width: 260px; font-size: 0.75rem; color: #fcd34d;
+      z-index: 50; white-space: normal; line-height: 1.4;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .err-cell:hover .err-tip { display: block; }
+
+    /* ── Liveness dot ── */
     .alive-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
     .alive-dot.on { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
     .alive-dot.off { background: #f87171; }
   </style>
 </head>
 <body>
-  <h1>Yield Farming Monitor</h1>
+
+  <nav class="nav">
+    <a href="/" class="active">Overview</a>
+    <a href="/analytics">Analytics</a>
+    <a href="/health">Health Check</a>
+  </nav>
+
+  <div class="header">
+    <h1>Yield Farming Monitor</h1>
+    <span class="info-icon">i
+      <div class="info-tooltip">
+        <h3>Risk Guard Circuit Breakers</h3>
+        <p style="margin-bottom:10px;color:#94a3b8">Three independent checks run before every trade. The first failure halts execution and fires a Telegram alert.</p>
+        <div class="guard">
+          <div class="guard-name">1. Balance Floor ($5)</div>
+          <div>Blocks if USDC balance drops below the minimum. Prevents trading into zero.</div>
+          <div class="guard-ex">e.g. balance = $4.20 → BLOCKED</div>
+        </div>
+        <div class="guard">
+          <div class="guard-name">2. Session Drawdown (10%)</div>
+          <div>Blocks if confirmed <em>lost</em> trades in the last 24h exceed 10% of the session start balance. Only real losses count — in-flight positions are excluded.</div>
+          <div class="guard-ex">e.g. start=$20, losses=$2.10 → 10.5% → BLOCKED</div>
+        </div>
+        <div class="guard">
+          <div class="guard-name">3. Consecutive Losses (3)</div>
+          <div>Blocks if the last 3 resolved trades are all <em>lost</em>. Signals a systematic issue requiring manual review.</div>
+          <div class="guard-ex">e.g. lost, lost, lost → BLOCKED</div>
+        </div>
+      </div>
+    </span>
+  </div>
 
   <!-- Status / Balance / Risk -->
   <div class="grid3">
@@ -70,33 +158,93 @@
   <!-- Trades table -->
   <div class="card">
     <h2>Recent Trades</h2>
-    <div class="filter-bar">
-      <button class="filter-btn active" onclick="setFilter(null, this)">All</button>
-      <button class="filter-btn" onclick="setFilter('submitted', this)">Submitted</button>
-      <button class="filter-btn" onclick="setFilter('filled', this)">Filled</button>
-      <button class="filter-btn" onclick="setFilter('won', this)">Won</button>
-      <button class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
-      <button class="filter-btn" onclick="setFilter('error', this)">Error</button>
+    <div class="table-toolbar">
+      <div class="filter-bar">
+        <button class="filter-btn active" onclick="setFilter(null, this)">All</button>
+        <button class="filter-btn" onclick="setFilter('submitted', this)">Submitted</button>
+        <button class="filter-btn" onclick="setFilter('filled', this)">Filled</button>
+        <button class="filter-btn" onclick="setFilter('won', this)">Won</button>
+        <button class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
+        <button class="filter-btn" onclick="setFilter('error', this)">Error</button>
+      </div>
+      <button class="tz-toggle" id="tz-btn" onclick="toggleTz()">🕐 Switch to German Time</button>
     </div>
     <table>
       <thead>
-        <tr><th>Time (UTC)</th><th>Market</th><th>Outcome</th><th>Price</th><th>Shares</th><th>Cost</th><th>Status</th><th>P&L</th></tr>
+        <tr><th id="time-col-header">Time (UTC)</th><th>Market</th><th>Outcome</th><th>Price</th><th>Shares</th><th>Cost</th><th>Status</th><th>P&L</th></tr>
       </thead>
       <tbody id="trades-tbody"></tbody>
     </table>
+    <div class="pagination">
+      <button class="page-btn" id="prev-btn" onclick="prevPage()" disabled>← Prev</button>
+      <span class="page-info" id="page-info">Page 1</span>
+      <button class="page-btn" id="next-btn" onclick="nextPage()">Next →</button>
+    </div>
   </div>
 
 <script>
   let pnlChart = null;
   let currentFilter = null;
+  let useGermanTime = false;
+  let currentPage = 0;
+  const PAGE_SIZE = 10;
+  let lastPageRowCount = 0;
 
-  function setFilter(status, btn) {
-    currentFilter = status;
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
+  // ── Timezone toggle ──────────────────────────────────────────────────────
+  function toggleTz() {
+    useGermanTime = !useGermanTime;
+    document.getElementById('tz-btn').textContent =
+      useGermanTime ? '🕐 Switch to UTC' : '🕐 Switch to German Time';
+    document.getElementById('time-col-header').textContent =
+      useGermanTime ? 'Time (DE)' : 'Time (UTC)';
     loadTrades();
   }
 
+  function formatTime(isoString) {
+    if (!isoString) return '—';
+    const d = new Date(isoString);
+    if (useGermanTime) {
+      // Always show full date + time in German format: "29.03.2026 01:29:51"
+      return new Intl.DateTimeFormat('de-DE', {
+        timeZone: 'Europe/Berlin',
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      }).format(d).replace(',', '');
+    }
+    // UTC: always show full date + time: "2026-03-28 23:29:51 UTC"
+    return d.toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+  }
+
+  // ── Error reason inference ───────────────────────────────────────────────
+  function inferErrorReason(t) {
+    const fp = t.fill_price != null ? parseFloat(t.fill_price) : null;
+    const cost = t.cost_usd != null ? parseFloat(t.cost_usd) : null;
+    const bal = t.balance_before != null ? parseFloat(t.balance_before) : null;
+    const sp = t.signal_price != null ? parseFloat(t.signal_price) : null;
+
+    if (fp === null && cost === null) return 'Order book empty or market already closed';
+    if (fp !== null && fp >= 0.99) return `CLOB live price $${fp.toFixed(4)} ≥ 0.99 — outside tradeable range`;
+    if (fp !== null && sp !== null && fp < 0.95) return `CLOB price $${fp.toFixed(4)} dropped below 0.95 threshold`;
+    if (cost !== null && cost > 6.0) return `Minimum order $${cost.toFixed(2)} exceeds $6.00 hard cap`;
+    if (bal !== null && bal > 0 && cost !== null && bal < cost) return `Insufficient balance ($${bal.toFixed(2)} < $${cost.toFixed(2)} needed)`;
+    if (sp !== null && fp !== null) {
+      const slippage = Math.abs(fp - sp) / sp * 100;
+      if (slippage > 10) return `Slippage ${slippage.toFixed(1)}% exceeds 10% limit`;
+    }
+    return 'Execution failed — check bot logs';
+  }
+
+  // ── Status cell rendering ────────────────────────────────────────────────
+  function renderStatus(t) {
+    if (t.status !== 'error') {
+      return `<span class="status-${t.status}">${t.status}</span>`;
+    }
+    const reason = inferErrorReason(t);
+    return `<span class="err-cell status-error">error<span class="err-tip">⚠ ${reason}</span></span>`;
+  }
+
+  // ── Data loaders ─────────────────────────────────────────────────────────
   async function loadStatus() {
     const [s, b] = await Promise.all([
       fetch('/api/status').then(r => r.json()),
@@ -107,7 +255,7 @@
     const dot = `<span class="alive-dot ${alive ? 'on' : 'off'}"></span>`;
     document.getElementById('bot-mode').innerHTML = dot + (s.mode || 'Unknown');
     document.getElementById('bot-lastseen').textContent = s.last_seen
-      ? 'Last seen: ' + new Date(s.last_seen).toLocaleTimeString()
+      ? 'Last seen: ' + formatTime(s.last_seen)
       : 'Never seen';
 
     document.getElementById('balance-current').textContent =
@@ -115,7 +263,7 @@
     const dd = b.drawdown_pct != null ? `${b.drawdown_pct.toFixed(1)}%` : '—';
     const floorWarn = b.floor_warning ? ' ⚠️ near floor' : '';
     document.getElementById('balance-info').textContent =
-      `Start: $${(b.session_start_balance || 0).toFixed(2)} | Drawdown: ${dd}${floorWarn}`;
+      `Start: $${(b.session_start_balance || 0).toFixed(2)} | Realized loss: ${dd}${floorWarn}`;
   }
 
   async function loadRisk() {
@@ -142,10 +290,12 @@
 
     const labels = chart.map(d => d.date);
     const data = chart.map(d => d.cumulative_pnl);
+    const lastVal = data.length ? data[data.length - 1] : 0;
 
     if (pnlChart) {
       pnlChart.data.labels = labels;
       pnlChart.data.datasets[0].data = data;
+      pnlChart.data.datasets[0].borderColor = lastVal >= 0 ? '#4ade80' : '#f87171';
       pnlChart.update();
     } else {
       const ctx = document.getElementById('pnl-chart').getContext('2d');
@@ -156,7 +306,7 @@
           datasets: [{
             label: 'Cumulative P&L ($)',
             data,
-            borderColor: data.length && data[data.length-1] >= 0 ? '#4ade80' : '#f87171',
+            borderColor: lastVal >= 0 ? '#4ade80' : '#f87171',
             backgroundColor: 'rgba(74,222,128,0.08)',
             tension: 0.3,
             fill: true,
@@ -176,22 +326,63 @@
   }
 
   async function loadTrades() {
-    const url = '/api/trades?limit=50' + (currentFilter ? '&status=' + currentFilter : '');
+    const offset = currentPage * PAGE_SIZE;
+    const url = `/api/trades?limit=${PAGE_SIZE}&offset=${offset}` + (currentFilter ? '&status=' + currentFilter : '');
     const trades = await fetch(url).then(r => r.json());
+    lastPageRowCount = trades.length;
+
     const tbody = document.getElementById('trades-tbody');
-    if (!trades.length) { tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b;text-align:center;padding:20px">No trades</td></tr>'; return; }
-    tbody.innerHTML = trades.map(t => {
-      const time = t.submitted_at ? new Date(t.submitted_at).toLocaleTimeString() : '—';
-      const title = (t.title || '').slice(0, 40);
-      const price = t.fill_price != null ? `$${parseFloat(t.fill_price).toFixed(3)}` : (t.signal_price ? `~$${parseFloat(t.signal_price).toFixed(3)}` : '—');
-      const shares = t.shares != null ? t.shares : '—';
-      const cost = t.cost_usd != null ? `$${parseFloat(t.cost_usd).toFixed(2)}` : '—';
-      const statusCls = `status-${t.status}`;
-      const pnl = t.pnl_usd != null
-        ? `<span class="${parseFloat(t.pnl_usd) >= 0 ? 'pnl-pos' : 'pnl-neg'}">${parseFloat(t.pnl_usd) >= 0 ? '+' : ''}$${parseFloat(t.pnl_usd).toFixed(4)}</span>`
-        : '—';
-      return `<tr><td>${time}</td><td title="${t.title}">${title}</td><td>${t.outcome || '—'}</td><td>${price}</td><td>${shares}</td><td>${cost}</td><td class="${statusCls}">${t.status}</td><td>${pnl}</td></tr>`;
-    }).join('');
+    if (!trades.length && currentPage === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b;text-align:center;padding:20px">No trades</td></tr>';
+    } else if (!trades.length) {
+      // Went past last page — go back one
+      currentPage = Math.max(0, currentPage - 1);
+      loadTrades();
+      return;
+    } else {
+      tbody.innerHTML = trades.map(t => {
+        const time = formatTime(t.submitted_at);
+        const title = (t.title || '').slice(0, 40);
+        const price = t.fill_price != null
+          ? `$${parseFloat(t.fill_price).toFixed(3)}`
+          : (t.signal_price ? `~$${parseFloat(t.signal_price).toFixed(3)}` : '—');
+        const shares = t.shares != null ? t.shares : '—';
+        const cost = t.cost_usd != null ? `$${parseFloat(t.cost_usd).toFixed(2)}` : '—';
+        const pnl = t.pnl_usd != null
+          ? `<span class="${parseFloat(t.pnl_usd) >= 0 ? 'pnl-pos' : 'pnl-neg'}">${parseFloat(t.pnl_usd) >= 0 ? '+' : ''}$${parseFloat(t.pnl_usd).toFixed(4)}</span>`
+          : '—';
+        return `<tr>
+          <td>${time}</td>
+          <td title="${t.title || ''}">${title}</td>
+          <td>${t.outcome || '—'}</td>
+          <td>${price}</td>
+          <td>${shares}</td>
+          <td>${cost}</td>
+          <td>${renderStatus(t)}</td>
+          <td>${pnl}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    document.getElementById('page-info').textContent = `Page ${currentPage + 1}`;
+    document.getElementById('prev-btn').disabled = currentPage === 0;
+    document.getElementById('next-btn').disabled = lastPageRowCount < PAGE_SIZE;
+  }
+
+  function prevPage() {
+    if (currentPage > 0) { currentPage--; loadTrades(); }
+  }
+
+  function nextPage() {
+    if (lastPageRowCount >= PAGE_SIZE) { currentPage++; loadTrades(); }
+  }
+
+  function setFilter(status, btn) {
+    currentFilter = status;
+    currentPage = 0;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadTrades();
   }
 
   async function refresh() {

@@ -1,12 +1,16 @@
 """
 risk_guard_service.py
 Three independent circuit breakers that must all pass before a yield trade is executed.
-Pure decision layer — no API calls, no mutations.
+Pure decision layer — no mutations.
 
 Circuit breakers (evaluated in order, first failure wins):
   1. Balance floor — stop if USDC < YIELD_BALANCE_FLOOR
-  2. Session drawdown — stop if loss from session start > YIELD_MAX_DRAWDOWN_PCT %
+  2. Session drawdown — stop if confirmed losses since session start > YIELD_MAX_DRAWDOWN_PCT %
   3. Consecutive losses — stop if last N resolved trades are all 'lost'
+
+Drawdown is measured from confirmed 'lost' DB rows only — NOT from the live CLOB balance.
+This avoids false triggers caused by in-flight positions temporarily depleting the balance
+(e.g. a $5 buy order drops the CLOB balance for 5 minutes until settlement credits it back).
 
 Configure via .env:
   YIELD_BALANCE_FLOOR=5
@@ -46,53 +50,62 @@ def get_balance_floor() -> float:
     return _BALANCE_FLOOR
 
 
-def check_risk(current_balance: float, session_start_balance: float) -> RiskStatus:
+def check_risk(
+    current_balance: float,
+    session_start_balance: float,
+    session_start_time,
+) -> RiskStatus:
     """
     Run all three circuit breakers. Returns on the first failure.
 
     Args:
-        current_balance: Current USDC balance.
+        current_balance: Current USDC balance (for floor check only).
         session_start_balance: USDC balance when the bot session started.
+        session_start_time: Datetime when the current session started.
 
     Returns:
         RiskStatus with allowed=True if all checks pass, or allowed=False
         with a human-readable reason string identifying the triggered breaker.
     """
+    from service import db_service
+
     # 1. Balance floor
     if current_balance < _BALANCE_FLOOR:
         reason = f"Balance floor hit: ${current_balance:.2f} < ${_BALANCE_FLOOR:.2f} minimum"
         logger.warning("Risk guard BLOCKED: %s", reason)
         return RiskStatus(allowed=False, reason=reason)
 
-    # 2. Session drawdown
+    # 2. Session drawdown — measured from confirmed losses only.
+    # Comparing CLOB balance would cause false triggers while positions are in-flight
+    # (a $5 order depletes CLOB balance until settlement, even if the trade wins).
     if session_start_balance > 0:
-        drawdown_pct = (session_start_balance - current_balance) / session_start_balance * 100
+        session_losses = db_service.get_session_realized_losses(session_start_time)
+        drawdown_pct = session_losses / session_start_balance * 100
         if drawdown_pct > _MAX_DRAWDOWN_PCT:
             reason = (
                 f"Drawdown limit hit: {drawdown_pct:.1f}% > {_MAX_DRAWDOWN_PCT:.0f}% "
-                f"(${session_start_balance:.2f} → ${current_balance:.2f})"
+                f"(${session_losses:.2f} confirmed losses on ${session_start_balance:.2f} start)"
             )
             logger.warning("Risk guard BLOCKED: %s", reason)
             return RiskStatus(allowed=False, reason=reason)
 
-    # 3. Consecutive losses (DB read — read-only, no mutations)
-    from service import db_service
+    # 3. Consecutive losses
     recent = db_service.get_recent_yield_trade_statuses(limit=_MAX_CONSECUTIVE_LOSSES)
     if len(recent) >= _MAX_CONSECUTIVE_LOSSES and all(s == "lost" for s in recent):
         reason = f"{_MAX_CONSECUTIVE_LOSSES} consecutive losses — manual review required"
         logger.warning("Risk guard BLOCKED: %s", reason)
         return RiskStatus(allowed=False, reason=reason)
 
+    session_losses = db_service.get_session_realized_losses(session_start_time)
+    drawdown_pct = session_losses / session_start_balance * 100 if session_start_balance > 0 else 0
     logger.debug(
-        "Risk guard OK: balance=$%.2f, drawdown=%.1f%%, recent=%s",
-        current_balance,
-        (session_start_balance - current_balance) / session_start_balance * 100 if session_start_balance > 0 else 0,
-        recent,
+        "Risk guard OK: balance=$%.2f, realized_drawdown=%.1f%% ($%.2f losses), recent=%s",
+        current_balance, drawdown_pct, session_losses, recent,
     )
     return RiskStatus(allowed=True, reason=None)
 
 
-def get_risk_dashboard_state(current_balance: float, session_start_balance: float) -> dict:
+def get_risk_dashboard_state(current_balance: float, session_start_balance: float, session_start_time) -> dict:
     """
     Return per-breaker state for the monitoring dashboard /api/risk endpoint.
 
@@ -108,10 +121,8 @@ def get_risk_dashboard_state(current_balance: float, session_start_balance: floa
             consecutive_loss_count += 1
         else:
             break
-    drawdown_pct = (
-        (session_start_balance - current_balance) / session_start_balance * 100
-        if session_start_balance > 0 else 0.0
-    )
+    session_losses = db_service.get_session_realized_losses(session_start_time)
+    drawdown_pct = session_losses / session_start_balance * 100 if session_start_balance > 0 else 0.0
 
     return {
         "balance_floor": {
@@ -124,7 +135,7 @@ def get_risk_dashboard_state(current_balance: float, session_start_balance: floa
             "current": round(drawdown_pct, 2),
             "threshold": _MAX_DRAWDOWN_PCT,
             "triggered": drawdown_pct > _MAX_DRAWDOWN_PCT,
-            "label": f"{drawdown_pct:.1f}% / {_MAX_DRAWDOWN_PCT:.0f}% max",
+            "label": f"{drawdown_pct:.1f}% realized losses / {_MAX_DRAWDOWN_PCT:.0f}% max",
         },
         "consecutive_losses": {
             "current": consecutive_loss_count,
