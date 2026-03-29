@@ -31,10 +31,14 @@ from utility.endpoints import GAMMA_MARKETS, CLOB_MARKETS
 logger = logging.getLogger(__name__)
 
 # How far ahead (minutes) to look for closing markets
-_DEFAULT_WINDOW_MINUTES = 5
+_DEFAULT_WINDOW_MINUTES = 10
 
 # Minimum price threshold — below this, skip (too much residual risk)
 _DEFAULT_THRESHOLD = 0.95
+
+# Maximum CLOB price we'll accept — CLOB rejects orders >= 0.99, and prices
+# above this indicate the market has already locked in with no tradeable spread.
+_MAX_CLOB_PRICE = 0.98
 
 # Maximum simultaneous open opportunities per cycle (safety cap)
 _MAX_TRADES_PER_CYCLE = 20
@@ -204,6 +208,16 @@ def scan_opportunities(
                 "Skipping: CLOB price $%.4f below threshold %.2f for %s (%s) — Gamma was $%.4f",
                 clob_price, threshold, candidate["title"][:50],
                 candidate["outcome_name"], candidate["gamma_price"],
+            )
+            continue
+
+        # Early rejection: CLOB rejects orders at >= 0.99, and prices approaching that
+        # level mean the spread has vanished. Reject here rather than wasting an execution
+        # attempt that will fail anyway at the CLOB range guard.
+        if clob_price >= _MAX_CLOB_PRICE:
+            logger.info(
+                "Skipping: CLOB price $%.4f >= $%.2f ceiling for %s (%s) — market locked in",
+                clob_price, _MAX_CLOB_PRICE, candidate["title"][:50], candidate["outcome_name"],
             )
             continue
 
