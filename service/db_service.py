@@ -143,6 +143,10 @@ def insert_yield_trade(
     status: str,
     session_balance_start: float,
     balance_before: float,
+    gamma_clob_spread: float | None = None,
+    minutes_to_close: float | None = None,
+    btc_dvol: float | None = None,
+    btc_iv_percentile: float | None = None,
 ) -> int:
     """Insert a new yield trade record. Returns the new row id."""
     conn = connection.get_connection()
@@ -161,6 +165,10 @@ def insert_yield_trade(
             status=status,
             session_balance_start=session_balance_start,
             balance_before=balance_before,
+            gamma_clob_spread=gamma_clob_spread,
+            minutes_to_close=minutes_to_close,
+            btc_dvol=btc_dvol,
+            btc_iv_percentile=btc_iv_percentile,
         )
     finally:
         conn.close()
@@ -238,11 +246,17 @@ def get_yield_trades_for_analytics() -> list[dict]:
         conn.close()
 
 
-def update_bot_heartbeat(mode: str, session_start_balance: float, current_balance: float) -> None:
+def update_bot_heartbeat(mode: str, session_start_balance: float, current_balance: float, session_start_time=None) -> None:
     """Update the bot liveness heartbeat row every cycle."""
     conn = connection.get_connection()
     try:
-        repository.upsert_bot_heartbeat(conn, mode=mode, session_start_balance=session_start_balance, current_balance=current_balance)
+        repository.upsert_bot_heartbeat(
+            conn,
+            mode=mode,
+            session_start_balance=session_start_balance,
+            current_balance=current_balance,
+            session_start_time=session_start_time,
+        )
     finally:
         conn.close()
 
@@ -252,5 +266,32 @@ def get_bot_heartbeat() -> dict | None:
     conn = connection.get_connection()
     try:
         return repository.get_bot_heartbeat(conn)
+    finally:
+        conn.close()
+
+
+def reset_session_start(new_balance: float, new_time) -> None:
+    """Overwrite session start balance and time — used by /reset_risk and midnight auto-reset."""
+    conn = connection.get_connection()
+    try:
+        repository.reset_session_start(conn, new_balance=new_balance, new_time=new_time)
+    finally:
+        conn.close()
+
+
+def request_risk_reset() -> None:
+    """Set reset_requested flag so the bot loop applies the reset on next cycle."""
+    conn = connection.get_connection()
+    try:
+        repository.request_risk_reset(conn)
+    finally:
+        conn.close()
+
+
+def get_db_health() -> dict:
+    """Return DB health metrics: stuck trades, error rate, pending count."""
+    conn = connection.get_connection()
+    try:
+        return repository.get_db_health(conn)
     finally:
         conn.close()

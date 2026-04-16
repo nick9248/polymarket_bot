@@ -346,6 +346,33 @@ def health_check_api():
     })
 
 
+@app.route("/api/risk/reset", methods=["POST"])
+def risk_reset():
+    """
+    Request a risk guard reset. Sets reset_requested=TRUE in bot_heartbeat.
+    The main bot loop picks this up on the next cycle, re-fetches the CLOB balance,
+    and resets session_start_balance + session_start_time.
+    """
+    try:
+        heartbeat = db_service.get_bot_heartbeat()
+        if not heartbeat:
+            return jsonify({"error": "Bot has never run — no heartbeat found"}), 404
+        db_service.request_risk_reset()
+        return jsonify({"status": "reset_requested", "message": "Bot will reset session on next cycle (within 5s)"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/health/db")
+def db_health():
+    """DB health check: stuck trades, error rate, pending settlement count."""
+    try:
+        health = db_service.get_db_health()
+        return jsonify(health)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("MONITOR_PORT", 5051))
     print(f"\n  Yield Farming Monitor → http://localhost:{port}\n")

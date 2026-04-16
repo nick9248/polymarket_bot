@@ -208,6 +208,10 @@ def insert_yield_trade(
     status: str,
     session_balance_start: float,
     balance_before: float,
+    gamma_clob_spread: float | None = None,
+    minutes_to_close: float | None = None,
+    btc_dvol: float | None = None,
+    btc_iv_percentile: float | None = None,
 ) -> int:
     """
     Insert a new yield trade record. Returns the new row id.
@@ -221,14 +225,16 @@ def insert_yield_trade(
     sql = """
         INSERT INTO yield_trades
             (token_id, condition_id, title, outcome, signal_price, fill_price,
-             shares, cost_usd, clob_order_id, status, session_balance_start, balance_before)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             shares, cost_usd, clob_order_id, status, session_balance_start, balance_before,
+             gamma_clob_spread, minutes_to_close, btc_dvol, btc_iv_percentile)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """
     with conn.cursor() as cur:
         cur.execute(sql, (
             token_id, condition_id, title, outcome, signal_price, fill_price,
             shares, cost_usd, clob_order_id, status, session_balance_start, balance_before,
+            gamma_clob_spread, minutes_to_close, btc_dvol, btc_iv_percentile,
         ))
         row = cur.fetchone()
     conn.commit()
@@ -250,7 +256,7 @@ def update_yield_trade(
         trade_id: Row id to update.
         **fields: Column name → new value pairs.
     """
-    allowed = {"status", "fill_price", "resolved_at", "settled_at", "pnl_usd"}
+    allowed = {"status", "fill_price", "resolved_at", "settled_at", "pnl_usd", "stop_loss_exit_price", "stop_loss_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
@@ -278,7 +284,7 @@ def get_open_yield_trades(conn: psycopg2.extensions.connection) -> list[dict]:
     sql = """
         SELECT id, token_id, condition_id, title, outcome, signal_price, fill_price,
                shares, cost_usd, status, submitted_at, resolved_at, settled_at, pnl_usd,
-               session_balance_start, balance_before
+               session_balance_start, balance_before, minutes_to_close
         FROM yield_trades
         WHERE status IN ('submitted', 'filled')
         ORDER BY submitted_at ASC
@@ -488,28 +494,55 @@ def upsert_bot_heartbeat(
     mode: str,
     session_start_balance: float,
     current_balance: float,
+    session_start_time=None,
 ) -> None:
     """
     Insert or update the single bot_heartbeat row (id=1).
     Called every cycle by the bot to signal liveness to the dashboard.
-
-    Args:
-        conn: Open psycopg2 connection.
-        mode: Bot mode string (e.g. 'yield-farming').
-        session_start_balance: USDC balance when the bot session started.
-        current_balance: Current USDC balance.
+    Does NOT overwrite session_start_time or reset_requested — those are
+    only mutated by reset_session_start / acknowledge_reset.
     """
     sql = """
-        INSERT INTO bot_heartbeat (id, mode, last_seen, session_start_balance, current_balance)
-        VALUES (1, %s, NOW(), %s, %s)
+        INSERT INTO bot_heartbeat (id, mode, last_seen, session_start_balance, current_balance, session_start_time)
+        VALUES (1, %s, NOW(), %s, %s, %s)
         ON CONFLICT (id) DO UPDATE SET
             mode = EXCLUDED.mode,
             last_seen = NOW(),
             session_start_balance = EXCLUDED.session_start_balance,
-            current_balance = EXCLUDED.current_balance
+            current_balance = EXCLUDED.current_balance,
+            session_start_time = COALESCE(bot_heartbeat.session_start_time, EXCLUDED.session_start_time)
     """
     with conn.cursor() as cur:
-        cur.execute(sql, (mode, session_start_balance, current_balance))
+        cur.execute(sql, (mode, session_start_balance, current_balance, session_start_time))
+    conn.commit()
+
+
+def reset_session_start(
+    conn: psycopg2.extensions.connection,
+    new_balance: float,
+    new_time,
+) -> None:
+    """
+    Overwrite session_start_balance and session_start_time in bot_heartbeat.
+    Used by manual /reset_risk command and midnight auto-reset.
+    Also clears reset_requested flag.
+    """
+    sql = """
+        UPDATE bot_heartbeat
+        SET session_start_balance = %s,
+            session_start_time    = %s,
+            reset_requested       = FALSE
+        WHERE id = 1
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (new_balance, new_time))
+    conn.commit()
+
+
+def request_risk_reset(conn: psycopg2.extensions.connection) -> None:
+    """Set reset_requested=TRUE in bot_heartbeat. Consumed by the main bot loop."""
+    with conn.cursor() as cur:
+        cur.execute("UPDATE bot_heartbeat SET reset_requested = TRUE WHERE id = 1")
     conn.commit()
 
 
@@ -518,10 +551,15 @@ def get_bot_heartbeat(conn: psycopg2.extensions.connection) -> dict | None:
     Return the bot_heartbeat row, or None if the bot has never run.
 
     Returns:
-        Dict with keys: mode, last_seen (ISO str), session_start_balance, current_balance.
+        Dict with keys: mode, last_seen (ISO str), session_start_balance,
+        current_balance, session_start_time (ISO str), reset_requested (bool).
         None if no heartbeat row exists.
     """
-    sql = "SELECT mode, last_seen, session_start_balance, current_balance FROM bot_heartbeat WHERE id = 1"
+    sql = """
+        SELECT mode, last_seen, session_start_balance, current_balance,
+               session_start_time, reset_requested
+        FROM bot_heartbeat WHERE id = 1
+    """
     with conn.cursor() as cur:
         cur.execute(sql)
         row = cur.fetchone()
@@ -532,4 +570,42 @@ def get_bot_heartbeat(conn: psycopg2.extensions.connection) -> dict | None:
         "last_seen": row[1].isoformat() if row[1] else None,
         "session_start_balance": float(row[2]) if row[2] else None,
         "current_balance": float(row[3]) if row[3] else None,
+        "session_start_time": row[4].isoformat() if row[4] else None,
+        "reset_requested": bool(row[5]) if row[5] is not None else False,
+    }
+
+
+def get_db_health(conn: psycopg2.extensions.connection) -> dict:
+    """
+    Return DB health metrics: stuck trade counts and recent error rate.
+    Used by the monitoring dashboard health check.
+    """
+    with conn.cursor() as cur:
+        # Stuck trades: submitted/filled older than 4 hours
+        cur.execute("""
+            SELECT COUNT(*) FROM yield_trades
+            WHERE status IN ('submitted', 'filled')
+            AND submitted_at < NOW() - INTERVAL '4 hours'
+        """)
+        stuck_count = cur.fetchone()[0]
+
+        # Error rate over last 50 resolved trades
+        cur.execute("""
+            SELECT status FROM yield_trades
+            WHERE status IN ('won', 'lost', 'error', 'expired')
+            ORDER BY submitted_at DESC LIMIT 50
+        """)
+        recent = [r[0] for r in cur.fetchall()]
+        error_count = sum(1 for s in recent if s == 'error')
+        error_rate = round(error_count / len(recent) * 100, 1) if recent else 0.0
+
+        # Total pending (submitted/filled within normal window)
+        cur.execute("SELECT COUNT(*) FROM yield_trades WHERE status IN ('submitted', 'filled')")
+        total_pending = cur.fetchone()[0]
+
+    return {
+        "stuck_trades": stuck_count,
+        "total_pending": total_pending,
+        "error_rate_pct": error_rate,
+        "recent_sample_size": len(recent),
     }

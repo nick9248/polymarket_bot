@@ -10,6 +10,7 @@ MAX_SLIPPAGE_PCT from the original signal price since coinman detected it.
 import logging
 import math
 import os
+import time
 
 import requests
 from dotenv import load_dotenv
@@ -389,8 +390,16 @@ def execute_yield_trade(
             order_size, args.price, args.price * args.size,
         )
 
+        t0 = time.perf_counter()
         signed_order = client.create_order(args)
+        sign_ms = (time.perf_counter() - t0) * 1000
+        logger.info("[TIMING] SDK (create_order / sign) → OK  %.0fms", sign_ms)
+
+        t0 = time.perf_counter()
         resp = client.post_order(signed_order)
+        post_ms = (time.perf_counter() - t0) * 1000
+        logger.info("[TIMING] SDK (post_order / CLOB submit) → %s  %.0fms",
+                    "OK" if resp.get("success") else "REJECTED", post_ms)
 
         if resp.get("success"):
             order_id = resp.get("orderID")
@@ -415,3 +424,108 @@ def execute_yield_trade(
     except Exception as e:
         logger.error("Unexpected error during yield trade: %s", e)
         return YieldTradeResult(success=False, order_id=None, fill_price=None, shares=None, cost_usd=None, balance_before=None)
+
+
+def execute_stop_loss_sell(
+    token_id: str,
+    condition_id: str,
+    title: str,
+    shares: int,
+    entry_price: float,
+) -> tuple[bool, float | None, int]:
+    """
+    Execute a stop-loss SELL on the Polymarket CLOB to exit a losing position.
+
+    Sells shares at the current best bid price (taker order, fills immediately).
+    The CLOB requires shares × $1.00 USDC as collateral for SELL orders (full face
+    value, regardless of sell price). If available USDC is less than that, sells as
+    many shares as the balance allows (partial exit) rather than failing entirely.
+
+    Args:
+        token_id: CLOB token ID of the outcome we hold.
+        condition_id: Market condition ID (for logging only).
+        title: Human-readable market title (for logging only).
+        shares: Number of shares to sell (our full position).
+        entry_price: Price we originally paid (for logging context only).
+
+    Returns:
+        (success, exit_price, shares_sold) — shares_sold may be < shares for partial exits.
+    """
+    logger.info("=== STOP-LOSS SELL ===")
+    logger.info("Market: %s | %d shares @ entry $%.4f", title[:60], shares, entry_price)
+
+    if not is_in_spain():
+        logger.error("Stop-loss blocked: geo location is not Spain (ES).")
+        return False, None, 0
+
+    if not token_id or shares <= 0:
+        logger.error("Stop-loss blocked: invalid token_id or shares=%d", shares)
+        return False, None, 0
+
+    try:
+        client = _get_client()
+
+        # ── Current bid price ──────────────────────────────────────────────────
+        bid_price = _get_current_market_price(client, token_id, "SELL")
+        if bid_price is None:
+            logger.warning("Stop-loss: no bids available for %s — market may be resolving", title[:60])
+            return False, None, 0
+
+        if bid_price <= 0.01:
+            logger.warning(
+                "Stop-loss: bid $%.4f too low — market already resolving, skipping: %s",
+                bid_price, title[:60],
+            )
+            return False, None, 0
+
+        # ── Submit SELL with retry on balance error ─────────────────────────────
+        # The CLOB requires shares × $1.00 USDC as collateral for SELL orders.
+        # get_balance_allowance() returns total proxy wallet balance and does not
+        # reflect the CLOB's internal collateral accounting — it cannot be used
+        # reliably to pre-cap shares. Instead: try the full position, and if the
+        # CLOB rejects with "not enough balance", reduce by 1 share and retry.
+        # Worst case: 5 attempts (~1.5 s) for a 5-share position.
+        attempt_shares = shares
+        while attempt_shares > 0:
+            args = OrderArgs(
+                token_id=token_id,
+                price=round(bid_price, 2),
+                size=float(attempt_shares),
+                side=SELL,
+            )
+            logger.info(
+                "Submitting stop-loss SELL: %d shares @ $%.4f (~$%.2f recovered)",
+                attempt_shares, args.price, args.price * attempt_shares,
+            )
+            try:
+                signed_order = client.create_order(args)
+                resp = client.post_order(signed_order)
+                if resp.get("success"):
+                    logger.info(
+                        "STOP-LOSS EXECUTED! OrderID=%s status=%s recovered=$%.2f",
+                        resp.get("orderID"), resp.get("status"), attempt_shares * bid_price,
+                    )
+                    return True, bid_price, attempt_shares
+                else:
+                    logger.error("STOP-LOSS ORDER REJECTED: %s", resp)
+                    return False, None, 0
+            except PolyApiException as e:
+                if e.status_code == 400 and "not enough balance" in str(e) and attempt_shares > 1:
+                    logger.warning(
+                        "Stop-loss: collateral insufficient for %d shares — retrying with %d",
+                        attempt_shares, attempt_shares - 1,
+                    )
+                    attempt_shares -= 1
+                    continue
+                elif e.status_code == 404:
+                    logger.warning("Stop-loss: market not found (404) — already closed: %s", title[:60])
+                else:
+                    logger.error("Stop-loss CLOB API error (status=%s): %s", e.status_code, e)
+                return False, None, 0
+
+        logger.error("Stop-loss: collateral insufficient even for 1 share — cannot exit: %s", title[:60])
+        return False, None, 0
+
+    except Exception as e:
+        logger.error("Stop-loss unexpected error: %s", e)
+        return False, None, 0

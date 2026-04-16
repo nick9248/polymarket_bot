@@ -28,18 +28,38 @@ _BASE_URL = f"https://api.telegram.org/bot{_BOT_TOKEN}"
 # Tracks the highest processed update_id so we never handle the same message twice
 _last_update_id: int = 0
 
+_REPLY_KEYBOARD = {
+    "keyboard": [
+        [{"text": "\U0001f3e5 Health"}, {"text": "\U0001f4b0 Balance"}, {"text": "\U0001f4ca Summary"}],
+        [{"text": "\U0001f4cb Trades"}, {"text": "\u26a0\ufe0f Reset Risk"}, {"text": "\U0001f9ea Test"}],
+    ],
+    "resize_keyboard": True,
+    "persistent": True,
+    "is_persistent": True,
+}
+
+_KEYBOARD_TEXT_MAP: dict[str, str] = {
+    "\U0001f3e5 health": "/health",
+    "\U0001f4b0 balance": "/balance",
+    "\U0001f4ca summary": "/summary",
+    "\U0001f4cb trades": "/trades",
+    "\u26a0\ufe0f reset risk": "/reset_risk",
+    "\U0001f9ea test": "/test",
+}
+
 
 def is_configured() -> bool:
     """Return True if both bot token and chat_id are set in .env."""
     return bool(_BOT_TOKEN and _CHAT_ID)
 
 
-def send_message(text: str) -> bool:
+def send_message(text: str, reply_markup: dict | None = None) -> bool:
     """
-    Send a plain or Markdown message to the configured chat.
+    Send a plain or HTML message to the configured chat.
 
     Args:
-        text: Message text. Supports Telegram MarkdownV2.
+        text: Message text. Supports Telegram HTML parse mode.
+        reply_markup: Optional Telegram reply markup dict (e.g. a keyboard).
 
     Returns:
         True if message sent successfully, False otherwise.
@@ -49,17 +69,20 @@ def send_message(text: str) -> bool:
         return False
 
     try:
+        payload = {
+            "chat_id": _CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML",
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         response = requests.post(
             f"{_BASE_URL}/sendMessage",
-            json={
-                "chat_id": _CHAT_ID,
-                "text": text,
-                "parse_mode": "HTML",
-            },
+            json=payload,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        logger.debug("Telegram message sent successfully.")
+        logger.info("Telegram message sent successfully (%d chars).", len(text))
         return True
     except Exception as exc:
         logger.error("Failed to send Telegram message: %s", exc)
@@ -79,7 +102,7 @@ def send_trade_alert(trade: TradeEntry, trader_name: str) -> bool:
     """
     side_emoji = "🟢" if trade.side == "BUY" else "🔴"
     usdc = trade.size * trade.price
-    
+
     token_id = trade.asset
     token_display = f"<code>{token_id[:8]}...{token_id[-8:]}</code>" if token_id else "N/A"
 
@@ -139,7 +162,11 @@ def get_pending_commands() -> list[str]:
             .strip()
             .lower()
         )
-        if text.startswith("/"):
+        if text.lower() in _KEYBOARD_TEXT_MAP:
+            mapped = _KEYBOARD_TEXT_MAP[text.lower()]
+            commands.append(mapped)
+            logger.info("Received Telegram keyboard button: %s → %s", text, mapped)
+        elif text.startswith("/"):
             # Strip any @BotName suffix (e.g. /health@polym_check_bot -> /health)
             commands.append(text.split("@")[0])
             logger.info("Received Telegram command: %s", text.split("@")[0])
@@ -194,7 +221,7 @@ def send_health_report(stats: dict) -> bool:
     )
 
     logger.info("Sending health report to Telegram.")
-    return send_message(text)
+    return send_message(text, reply_markup=_REPLY_KEYBOARD)
 
 
 def send_test_result(success: bool, detail: str) -> bool:
@@ -207,7 +234,7 @@ def send_test_result(success: bool, detail: str) -> bool:
         f"<b>Status:</b> {status}\n"
         f"<b>Detail:</b> {detail}"
     )
-    return send_message(text)
+    return send_message(text, reply_markup=_REPLY_KEYBOARD)
 
 
 def send_leaderboard_summary(entries, period: str, category: str) -> bool:
@@ -252,8 +279,8 @@ def send_yield_trade_won(title: str, outcome: str, pnl_usd: float, session_net_p
         f"\n"
         f"📋 <b>Market:</b> {title}\n"
         f"🎯 <b>Outcome:</b> {outcome}\n"
-        f"💸 <b>P&L:</b> +${pnl_usd:.4f}\n"
-        f"📊 <b>Session net P&L:</b> ${session_net_pnl:+.2f}\n"
+        f"💸 <b>P&amp;L:</b> +${pnl_usd:.4f}\n"
+        f"📊 <b>Session net P&amp;L:</b> ${session_net_pnl:+.2f}\n"
         f"🏆 <b>Win rate:</b> {win_rate * 100:.1f}%"
     )
     return send_message(text)
@@ -267,7 +294,7 @@ def send_yield_trade_lost(title: str, outcome: str, loss_usd: float, session_net
         f"📋 <b>Market:</b> {title}\n"
         f"🎯 <b>Outcome:</b> {outcome}\n"
         f"💸 <b>Loss:</b> -${abs(loss_usd):.4f}\n"
-        f"📊 <b>Session net P&L:</b> ${session_net_pnl:+.2f}\n"
+        f"📊 <b>Session net P&amp;L:</b> ${session_net_pnl:+.2f}\n"
         f"📉 <b>Win rate:</b> {win_rate * 100:.1f}%"
     )
     return send_message(text)
@@ -281,6 +308,19 @@ def send_risk_guard_blocked(reason: str) -> bool:
         f"⚠️ <b>Reason:</b> {reason}\n"
         f"\n"
         f"Bot will keep scanning but will not execute trades until conditions improve."
+    )
+    return send_message(text)
+
+
+def send_risk_guard_reset(new_balance: float, triggered_by: str) -> bool:
+    """Confirm that the risk guard has been manually reset."""
+    text = (
+        f"✅ <b>RISK GUARD RESET</b>\n"
+        f"\n"
+        f"🔄 <b>Triggered by:</b> {triggered_by}\n"
+        f"🏦 <b>New session start:</b> ${new_balance:.2f}\n"
+        f"\n"
+        f"Trading resumed. Drawdown tracking restarts from this balance."
     )
     return send_message(text)
 
@@ -312,8 +352,33 @@ def send_yield_daily_summary(
         f"\n"
         f"📊 <b>Trades today:</b> {total_trades} | Won: {won} | Lost: {lost}\n"
         f"🏆 <b>Win rate:</b> {win_rate * 100:.1f}%\n"
-        f"💸 <b>Net P&L:</b> ${net_pnl:+.2f}\n"
+        f"💸 <b>Net P&amp;L:</b> ${net_pnl:+.2f}\n"
         f"🏦 <b>Current balance:</b> ${current_balance:.2f}"
+    )
+    return send_message(text)
+
+
+def send_stop_loss_triggered(
+    title: str,
+    outcome: str,
+    shares: int,
+    exit_price: float,
+    recovered_usd: float,
+    cost_usd: float,
+    pnl_usd: float,
+    session_net_pnl: float,
+) -> bool:
+    """Alert when a stop-loss sell is executed to exit a losing position."""
+    text = (
+        f"🛑 <b>STOP-LOSS TRIGGERED</b>\n"
+        f"\n"
+        f"📋 <b>Market:</b> {title}\n"
+        f"🎯 <b>Outcome:</b> {outcome}\n"
+        f"📦 <b>Shares sold:</b> {shares}\n"
+        f"💵 <b>Exit price:</b> ${exit_price:.4f}\n"
+        f"💰 <b>Recovered:</b> ${recovered_usd:.2f} / ${cost_usd:.2f} invested\n"
+        f"💸 <b>P&amp;L:</b> ${pnl_usd:+.2f} (vs -${cost_usd:.2f} full loss)\n"
+        f"📊 <b>Session net P&amp;L:</b> ${session_net_pnl:+.2f}"
     )
     return send_message(text)
 
@@ -327,3 +392,80 @@ def send_yield_error(context: str, error: str) -> bool:
         f"⚠️ <b>Error:</b> {error[:300]}"
     )
     return send_message(text)
+
+
+def register_commands() -> bool:
+    """
+    Register bot command list with BotFather via setMyCommands.
+    Makes commands appear in the / autocomplete menu. Idempotent.
+    Called once at bot startup.
+    """
+    if not is_configured():
+        return False
+    commands = [
+        {"command": "health",     "description": "Bot uptime, cycle count, DB and geo status"},
+        {"command": "balance",    "description": "Current USDC balance and drawdown"},
+        {"command": "summary",    "description": "Session P&amp;L, win rate, trade count"},
+        {"command": "trades",     "description": "Last 5 resolved trades with P&amp;L"},
+        {"command": "reset_risk", "description": "Reset risk guard and resume trading"},
+        {"command": "test",       "description": "Run a live order test on the CLOB"},
+    ]
+    try:
+        response = requests.post(
+            f"{_BASE_URL}/setMyCommands",
+            json={"commands": commands},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        logger.info("Telegram: bot commands registered (%d commands).", len(commands))
+        return True
+    except Exception as exc:
+        logger.warning("Telegram: failed to register commands: %s", exc)
+        return False
+
+
+def send_keyboard() -> bool:
+    """Send the persistent reply keyboard. Call once at startup."""
+    return send_message("\U0001f916 Yield farming bot online.", reply_markup=_REPLY_KEYBOARD)
+
+
+def send_balance_status(current_balance: float, session_start: float, drawdown_pct: float, floor: float) -> bool:
+    """Send current balance and drawdown on /balance command."""
+    icon = "\U0001f7e2" if current_balance >= floor * 2 else ("\U0001f7e1" if current_balance >= floor else "\U0001f534")
+    text = (
+        f"{icon} <b>Balance Status</b>\n"
+        f"\n"
+        f"\U0001f3e6 <b>Current balance:</b> ${current_balance:.2f}\n"
+        f"\U0001f4ca <b>Session start:</b> ${session_start:.2f}\n"
+        f"\U0001f4c9 <b>Drawdown:</b> {drawdown_pct:.1f}%\n"
+        f"\U0001f6d1 <b>Floor:</b> ${floor:.2f}"
+    )
+    return send_message(text, reply_markup=_REPLY_KEYBOARD)
+
+
+def send_session_summary(total_trades: int, won: int, lost: int, win_rate: float, net_pnl: float) -> bool:
+    """Send session P&L summary on /summary command."""
+    icon = "\U0001f4c8" if net_pnl >= 0 else "\U0001f4c9"
+    text = (
+        f"{icon} <b>Session Summary</b>\n"
+        f"\n"
+        f"\U0001f4ca <b>Trades:</b> {total_trades} | Won: {won} | Lost: {lost}\n"
+        f"\U0001f3c6 <b>Win rate:</b> {win_rate * 100:.1f}%\n"
+        f"\U0001f4b8 <b>Net P&amp;L:</b> ${net_pnl:+.2f}"
+    )
+    return send_message(text, reply_markup=_REPLY_KEYBOARD)
+
+
+def send_recent_trades(trades: list) -> bool:
+    """Send last N resolved trades on /trades command."""
+    if not trades:
+        return send_message("\U0001f4cb <b>No resolved trades yet.</b>", reply_markup=_REPLY_KEYBOARD)
+    lines = ["\U0001f4cb <b>Recent Trades</b>\n"]
+    for t in trades:
+        status = t.get("status", "?")
+        pnl = t.get("pnl_usd")
+        icon = "\u2705" if status == "won" else ("\U0001f6d1" if status == "stopped" else ("\u274c" if status == "lost" else "\u23f8"))
+        pnl_str = f"${float(pnl):+.2f}" if pnl is not None else "\u2014"
+        title = (t.get("title") or "Unknown")[:45]
+        lines.append(f"{icon} {title}\n    {pnl_str}")
+    return send_message("\n".join(lines), reply_markup=_REPLY_KEYBOARD)

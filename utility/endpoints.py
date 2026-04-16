@@ -34,3 +34,6 @@ CLOB_API_BASE_URL = "https://clob.polymarket.com"
 
 # Public CLOB market metadata — no auth required; returns correct token IDs and live prices
 CLOB_MARKETS = f"{CLOB_API_BASE_URL}/markets"
+
+# Public CLOB orderbook — returns live bids/asks for a token; best ask is the real executable price
+CLOB_BOOK = f"{CLOB_API_BASE_URL}/book"

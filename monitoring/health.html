@@ -90,12 +90,33 @@
     .score-bar-fill { height: 4px; border-radius: 2px; transition: width 0.6s ease; }
 
     /* Rerun button */
-    .rerun-wrap { display: flex; justify-content: center; margin-top: 28px; }
+    .rerun-wrap { display: flex; justify-content: center; margin-top: 28px; gap: 10px; flex-wrap: wrap; }
     .rerun-btn {
       background: #2d3348; border: 1px solid #3b4fd9; color: #94a3b8;
       padding: 8px 24px; border-radius: 8px; cursor: pointer; font-size: 0.85rem;
     }
     .rerun-btn:hover { color: #f1f5f9; background: #3b4fd9; }
+
+    /* Reset risk guard button */
+    .reset-btn {
+      background: #3b0000; border: 1px solid #dc2626; color: #fca5a5;
+      padding: 8px 24px; border-radius: 8px; cursor: pointer; font-size: 0.85rem;
+      transition: background 0.15s;
+    }
+    .reset-btn:hover { background: #7f1d1d; color: #fff; }
+    .reset-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* DB health panel */
+    .db-panel { max-width: 640px; margin: 28px auto 0; }
+    .db-panel-title { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: #475569; margin-bottom: 10px; }
+    .db-row { display: flex; justify-content: space-between; align-items: center;
+      background: #1e2130; border: 1px solid #2d3348; border-radius: 8px;
+      padding: 10px 16px; margin-bottom: 8px; font-size: 0.83rem; }
+    .db-row-label { color: #94a3b8; }
+    .db-row-val { font-weight: 600; }
+    .db-ok { color: #4ade80; }
+    .db-warn { color: #fbbf24; }
+    .db-err { color: #f87171; }
 
     .hidden { display: none; }
   </style>
@@ -150,7 +171,11 @@
 
     <div class="rerun-wrap">
       <button class="rerun-btn" onclick="runCheck()">Run Again</button>
+      <button class="reset-btn" id="reset-btn" onclick="resetRiskGuard()">Reset Risk Guard</button>
     </div>
+
+    <!-- DB health panel -->
+    <div class="db-panel" id="db-panel"></div>
   </div>
 
 <script>
@@ -256,10 +281,68 @@
         }, 200 + idx * 280);
       });
 
+      // Load DB health panel after checks render
+      loadDbHealth();
+
     } catch (err) {
       document.getElementById('running-wrap').classList.add('hidden');
       document.getElementById('start-wrap').classList.remove('hidden');
       alert('Health check failed: ' + err.message);
+    }
+  }
+
+  async function loadDbHealth() {
+    try {
+      const d = await fetch('/api/health/db').then(r => r.json());
+      const panel = document.getElementById('db-panel');
+      if (!panel) return;
+
+      const stuckCls = d.stuck_trades > 0 ? 'db-err' : 'db-ok';
+      const errCls   = d.error_rate_pct > 10 ? 'db-err' : d.error_rate_pct > 5 ? 'db-warn' : 'db-ok';
+      const pendCls  = d.total_pending > 5 ? 'db-warn' : 'db-ok';
+
+      panel.innerHTML = `
+        <div class="db-panel-title">DB Health</div>
+        <div class="db-row">
+          <span class="db-row-label">Stuck trades (&gt;4h, unresolved)</span>
+          <span class="db-row-val ${stuckCls}">${d.stuck_trades}</span>
+        </div>
+        <div class="db-row">
+          <span class="db-row-label">Currently pending (submitted / filled)</span>
+          <span class="db-row-val ${pendCls}">${d.total_pending}</span>
+        </div>
+        <div class="db-row">
+          <span class="db-row-label">Error rate (last ${d.recent_sample_size} resolved)</span>
+          <span class="db-row-val ${errCls}">${d.error_rate_pct}%</span>
+        </div>
+      `;
+    } catch (e) {
+      const panel = document.getElementById('db-panel');
+      if (panel) panel.innerHTML = '<div class="db-panel-title" style="color:#f87171">DB health unavailable</div>';
+    }
+  }
+
+  async function resetRiskGuard() {
+    const btn = document.getElementById('reset-btn');
+    if (!confirm('Reset the risk guard?\n\nThis resets the session start balance to the current CLOB balance and resumes trading.\n\nOnly do this after reviewing why the guard was triggered.')) return;
+    btn.disabled = true;
+    btn.textContent = 'Resetting…';
+    try {
+      const resp = await fetch('/api/risk/reset', { method: 'POST' });
+      const data = await resp.json();
+      if (resp.ok) {
+        btn.textContent = 'Reset Sent ✓';
+        btn.style.background = '#14532d';
+        btn.style.borderColor = '#16a34a';
+        btn.style.color = '#86efac';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Reset Risk Guard'; btn.style = ''; }, 4000);
+      } else {
+        alert('Reset failed: ' + (data.error || 'Unknown error'));
+        btn.disabled = false; btn.textContent = 'Reset Risk Guard';
+      }
+    } catch (e) {
+      alert('Reset failed: ' + e.message);
+      btn.disabled = false; btn.textContent = 'Reset Risk Guard';
     }
   }
 </script>

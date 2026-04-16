@@ -26,5 +26,6 @@ class YieldOpportunity:
     token_id: str
     title: str
     outcome: str
-    price: float
+    price: float       # CLOB live price (authoritative)
+    gamma_price: float  # Gamma API price used for pre-filter (for spread logging)
     close_time: datetime

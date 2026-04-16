@@ -88,8 +88,31 @@ CREATE TABLE IF NOT EXISTS bot_heartbeat (
     mode                  TEXT,
     last_seen             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     session_start_balance NUMERIC(10,2),
-    current_balance       NUMERIC(10,2)
+    current_balance       NUMERIC(10,2),
+    session_start_time    TIMESTAMPTZ,
+    reset_requested       BOOLEAN NOT NULL DEFAULT FALSE
 );
+"""
+
+# Migrate existing bot_heartbeat table to add columns introduced after initial deploy.
+_MIGRATE_BOT_HEARTBEAT = """
+ALTER TABLE bot_heartbeat ADD COLUMN IF NOT EXISTS session_start_time TIMESTAMPTZ;
+ALTER TABLE bot_heartbeat ADD COLUMN IF NOT EXISTS reset_requested BOOLEAN NOT NULL DEFAULT FALSE;
+"""
+
+# Migrate yield_trades to add context columns for post-hoc volatility analysis.
+# btc_dvol and btc_iv_percentile are NULL until Deribit integration is wired in.
+_MIGRATE_YIELD_TRADES = """
+ALTER TABLE yield_trades ADD COLUMN IF NOT EXISTS gamma_clob_spread NUMERIC(6,4);
+ALTER TABLE yield_trades ADD COLUMN IF NOT EXISTS minutes_to_close NUMERIC(6,2);
+ALTER TABLE yield_trades ADD COLUMN IF NOT EXISTS btc_dvol NUMERIC(6,2);
+ALTER TABLE yield_trades ADD COLUMN IF NOT EXISTS btc_iv_percentile NUMERIC(5,2);
+"""
+
+# Migrate yield_trades to add stop-loss tracking columns.
+_MIGRATE_YIELD_TRADES_STOP_LOSS = """
+ALTER TABLE yield_trades ADD COLUMN IF NOT EXISTS stop_loss_exit_price NUMERIC(6,4);
+ALTER TABLE yield_trades ADD COLUMN IF NOT EXISTS stop_loss_at TIMESTAMPTZ;
 """
 
 _ALL_TABLES = [
@@ -140,13 +163,20 @@ def create_database_if_not_exists() -> None:
 def init_schema() -> None:
     """
     Create all required tables in the polymarket_robot database if they do not exist.
-    Safe to call on every startup — uses CREATE TABLE IF NOT EXISTS.
+    Also applies column migrations for tables added after the initial deploy.
+    Safe to call on every startup.
     """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             for statement in _ALL_TABLES:
                 cur.execute(statement)
+            # Apply migrations for columns added after initial deploy
+            for migration in (_MIGRATE_BOT_HEARTBEAT, _MIGRATE_YIELD_TRADES, _MIGRATE_YIELD_TRADES_STOP_LOSS):
+                for statement in migration.strip().splitlines():
+                    statement = statement.strip()
+                    if statement:
+                        cur.execute(statement)
         conn.commit()
         logger.info("Database schema initialised (tables: leaderboard_snapshots, trader_trades, tracked_wallets, yield_trades, bot_heartbeat).")
     finally:
