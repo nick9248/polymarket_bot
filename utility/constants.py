@@ -33,6 +33,10 @@ class OrderBy(str, Enum):
     PNL = "PNL"
     VOL = "VOL"
 
+# Note: Category, TimePeriod, and OrderBy are kept for scripts/, tests/, and
+# leaderboard/trades services which are still usable standalone. The main bot
+# daemon runs exclusively in yield farming mode and does not use them.
+
 
 # Leaderboard pagination limits
 DEFAULT_LIMIT: int = 25

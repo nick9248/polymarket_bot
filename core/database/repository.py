@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 
 import psycopg2.extensions
+from psycopg2 import sql as psql
 
 from core.models.leaderboard import LeaderboardEntry
 from core.models.trades import TradeEntry
@@ -260,11 +261,12 @@ def update_yield_trade(
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
-    set_clause = ", ".join(f"{k} = %s" for k in updates)
+    set_parts = [psql.SQL("{} = %s").format(psql.Identifier(k)) for k in updates]
+    set_clause = psql.SQL(", ").join(set_parts)
+    query = psql.SQL("UPDATE yield_trades SET {} WHERE id = %s").format(set_clause)
     values = list(updates.values()) + [trade_id]
-    sql = f"UPDATE yield_trades SET {set_clause} WHERE id = %s"
     with conn.cursor() as cur:
-        cur.execute(sql, values)
+        cur.execute(query, values)
     conn.commit()
 
 

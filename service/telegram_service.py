@@ -156,20 +156,23 @@ def get_pending_commands() -> list[str]:
     commands = []
     for update in updates:
         _last_update_id = max(_last_update_id, update["update_id"])
-        text = (
-            update.get("message", {})
-            .get("text", "")
-            .strip()
-            .lower()
-        )
+        message = update.get("message", {})
+
+        # Reject commands from any chat other than the configured one.
+        incoming_chat_id = str(message.get("chat", {}).get("id", ""))
+        if _CHAT_ID and incoming_chat_id != str(_CHAT_ID):
+            logger.warning("Rejected command from unauthorized chat_id: %s", incoming_chat_id)
+            continue
+
+        text = message.get("text", "").strip().lower()
         if text.lower() in _KEYBOARD_TEXT_MAP:
             mapped = _KEYBOARD_TEXT_MAP[text.lower()]
             commands.append(mapped)
             logger.info("Received Telegram keyboard button: %s → %s", text, mapped)
         elif text.startswith("/"):
-            # Strip any @BotName suffix (e.g. /health@polym_check_bot -> /health)
-            commands.append(text.split("@")[0])
-            logger.info("Received Telegram command: %s", text.split("@")[0])
+            cmd = text.split("@")[0]
+            commands.append(cmd)
+            logger.info("Received Telegram command: %s", cmd)
 
     return commands
 

@@ -76,11 +76,6 @@ _MAX_MINS_HOURLY = 3.0  # only enter hourly markets with ≤3 min to close
 _rv_env = os.getenv("YIELD_MAX_REALIZED_VOL", "0.50").strip()
 _MAX_REALIZED_VOL: float | None = float(_rv_env) if _rv_env else None
 
-# Session hours filter disabled — 90-day data shows off-hours win rate is 99.1% vs
-# 99.3% in-session (0.2% difference), not worth blocking 56% of trading time.
-# Two-phase filter alone handles the main risk. Filter kept in code but never fires.
-_SESSION_START_UTC_MINUTES = 0  # 0 = accept all hours
-
 # Markets executed this session — keyed by token_id to prevent re-entry
 _executed_token_ids: set[str] = set()
 
@@ -89,21 +84,6 @@ _executed_token_ids: set[str] = set()
 # Module-level so it persists across the 5-second polling cycles within a session.
 # Old windows never match new opportunities (close_time has already passed), so no cleanup needed.
 _traded_close_windows: set = set()
-
-def _is_trading_session(close_time: datetime) -> bool:
-    """
-    Returns True if the market closes during active trading hours (9:30AM–8PM ET).
-
-    Outside these hours liquidity drops and late reversals are more common.
-    Uses UTC time with a fixed EDT offset (UTC-4). Winter EST shifts the window
-    by one hour — acceptable approximation given the evidence pattern.
-
-    Active window: 13:30–00:00 UTC (9:30AM–8PM EDT).
-    Skip window:   00:00–13:30 UTC (8PM–9:30AM EDT).
-    """
-    total_minutes = close_time.hour * 60 + close_time.minute
-    return total_minutes >= _SESSION_START_UTC_MINUTES
-
 
 def _is_updown_market(title: str) -> bool:
     """
@@ -279,22 +259,9 @@ def scan_opportunities(
 
     # Step 2: resolve verified CLOB token IDs only for candidates that passed the filter
     opportunities: list[YieldOpportunity] = []
-    session_skipped = 0
 
     for candidate in candidates:
         close_time = candidate["close_time"]
-
-        # Session hours filter: skip markets closing outside 9:30AM–8PM ET.
-        # Evidence: 3/5 live losses and majority of 90-day backtested losses were
-        # in the 8PM–9:30AM ET window. Liquidity drops and reversals increase at night.
-        if not _is_trading_session(close_time):
-            logger.info(
-                "Session filter: skipping %s (%s) — closes at %s UTC (outside 13:30–00:00 window)",
-                candidate["title"][:50], candidate["outcome_name"],
-                close_time.strftime("%H:%M"),
-            )
-            session_skipped += 1
-            continue
 
         token_id, clob_price = _resolve_clob_token(
             candidate["condition_id"], candidate["outcome_name"]
@@ -340,9 +307,8 @@ def scan_opportunities(
     opportunities.sort(key=lambda o: o.price, reverse=True)
 
     logger.info(
-        "Yield scan: %d polled → %d up/down above %.2f → %d session-filtered → %d ready to execute",
-        len(markets), len(candidates), threshold,
-        session_skipped, len(opportunities),
+        "Yield scan: %d polled → %d up/down above %.2f → %d ready to execute",
+        len(markets), len(candidates), threshold, len(opportunities),
     )
 
     return opportunities
