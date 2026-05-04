@@ -9,8 +9,11 @@ import logging
 logging.disable(logging.CRITICAL)
 
 def main():
-    wallet = "0xTARGET_WALLET_REDACTED"
-    print(f"Fetching trades for justdance ({wallet})...")
+    wallet = os.getenv("TARGET_WALLET", "")
+    if not wallet:
+        print("Set TARGET_WALLET env var to the trader's wallet address.")
+        return
+    print(f"Fetching trades for {wallet}...")
     
     try:
         trades = fetch_user_trades(wallet, limit=3000)

@@ -31,3 +31,8 @@ htmlcov/
 
 # Git worktrees
 .worktrees/
+
+# AI assistant context files (local only)
+CLAUDE.md
+ANTIGRAVITY.md
+docs/superpowers/

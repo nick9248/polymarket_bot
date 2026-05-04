@@ -25,7 +25,7 @@ A VPS running 24/7 eliminates the sleep gap entirely and gets to 720h in approxi
 | **Cost** | €5.94/month |
 | **Location** | USA (Ashburn VA) |
 | **OS** | Ubuntu 24.04 LTS |
-| **IPv4** | VPS_IP_REDACTED |
+| **IPv4** | `<vps-ip>` |
 | **Hostname** | option-trading-vps |
 
 ---
@@ -87,7 +87,7 @@ A VPS running 24/7 eliminates the sleep gap entirely and gets to 720h in approxi
 
 ```
 Host option-server
-    HostName VPS_IP_REDACTED
+    HostName <vps-ip>
     User nick
     IdentityFile C:\Users\Nick\.ssh\option_trading
     IdentitiesOnly yes
@@ -127,7 +127,7 @@ Connect with: `ssh option-server`
 - Installed build tools: `python3-pip build-essential libpq-dev git`
 
 ### Step 4: Database Configuration
-- Created PostgreSQL user `nick` with password `DB_PASSWORD_REDACTED`
+- Created PostgreSQL user `nick` with a strong password
 - Created database `option_trading` owned by `nick`
 - Set `listen_addresses = 'localhost'` in `postgresql.conf`
 - PostgreSQL set to auto-start on boot
@@ -262,7 +262,7 @@ The sync script pulls these 12 tables from VPS to local PC:
 ## 10. VPS .env Contents
 
 ```env
-DB_PASSWORD=DB_PASSWORD_REDACTED
+DB_PASSWORD=<your-db-password>
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=option_trading
