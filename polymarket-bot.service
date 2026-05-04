@@ -15,7 +15,7 @@ EnvironmentFile=/home/nick/polymarket_bot/systemd.env
 
 Environment=PYTHONUNBUFFERED=1
 
-ExecStart=/home/nick/polymarket_bot/.venv/bin/python main.py --wallets ${WALLETS}
+ExecStart=/home/nick/polymarket_bot/.venv/bin/python main.py --yield-farming
 
 # Restart as safety net if the process crashes (the daemon loop handles normal cycling)
 Restart=on-failure
