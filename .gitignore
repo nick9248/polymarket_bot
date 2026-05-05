@@ -5,8 +5,9 @@
 venv/
 env/
 
-# Secrets
+# Secrets / Environment variables
 .env
+systemd.env
 
 # Python
 __pycache__/
